@@ -51,6 +51,22 @@
    - Windows: `unity/Assets/Plugins/x86_64/rigidbody_cuda.dll`
 3. In Unity Import Settings, enable the target platform/CPU architecture for the plugin.
 
+### Unity precision selection at build time
+
+- `RigidBodyDynamicsLab` now dispatches through a compile-time bridge:
+  - Default (no define): FP16 plugin (`librigidbody_cuda.so`)
+  - With define `RB_CUDA_BF16`: BF16 plugin (`librigidbody_cuda_bf.so`)
+- Build/copy helper script:
+
+```bash
+bash ./scripts/build_unity_plugin.sh fp16
+bash ./scripts/build_unity_plugin.sh bf16
+```
+
+- In Unity Player Settings -> Scripting Define Symbols:
+  - Leave unset for FP16
+  - Add `RB_CUDA_BF16` for BF16
+
 ### Runtime fallback behavior
 
 - `RigidBodyDynamicsLab` attempts CUDA integration when `useCudaIntegration=true`.

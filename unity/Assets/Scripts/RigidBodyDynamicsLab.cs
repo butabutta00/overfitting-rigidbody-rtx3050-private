@@ -59,7 +59,19 @@ public class RigidBodyDynamicsLab : MonoBehaviour
     }
 
     [DllImport("rigidbody_cuda", EntryPoint = "RbCudaStepSingle")]
-    private static extern int RbCudaStepSingle(ref CudaRigidBodyState state, float dt, int integrationMethod, int enableTranslation, int enableRotation);
+    private static extern int RbCudaStepSingleFp(ref CudaRigidBodyState state, float dt, int integrationMethod, int enableTranslation, int enableRotation);
+
+    [DllImport("rigidbody_cuda_bf", EntryPoint = "RbCudaStepSingle")]
+    private static extern int RbCudaStepSingleBf(ref CudaRigidBodyState state, float dt, int integrationMethod, int enableTranslation, int enableRotation);
+
+    private static int RbCudaStepSingleBridge(ref CudaRigidBodyState state, float dt, int integrationMethod, int enableTranslation, int enableRotation)
+    {
+#if RB_CUDA_BF16
+        return RbCudaStepSingleBf(ref state, dt, integrationMethod, enableTranslation, enableRotation);
+#else
+        return RbCudaStepSingleFp(ref state, dt, integrationMethod, enableTranslation, enableRotation);
+#endif
+    }
 
     private void Start()
     {
@@ -183,7 +195,7 @@ public class RigidBodyDynamicsLab : MonoBehaviour
 
         try
         {
-            int status = RbCudaStepSingle(ref state, dt, integrationMethod, enableTranslation ? 1 : 0, enableRotation ? 1 : 0);
+            int status = RbCudaStepSingleBridge(ref state, dt, integrationMethod, enableTranslation ? 1 : 0, enableRotation ? 1 : 0);
             if (status != 0)
             {
                 Debug.LogWarning($"CUDA integration failed with status={status}. Falling back to CPU.");
