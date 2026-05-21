@@ -36,12 +36,14 @@ else {
 $pluginDir = Join-Path $repoRoot "unity/Assets/Plugins/x86_64"
 New-Item -ItemType Directory -Force -Path $pluginDir | Out-Null
 
+$diagnosticsOpt = if ($Diagnostics.IsPresent) { "ON" } else { "OFF" }
+
 $configureArgs = @(
     "-S", (Join-Path $repoRoot "src"),
     "-B", $buildDir,
     "-DRB_BUILD_FP16=$fpOpt",
     "-DRB_BUILD_BF16=$bfOpt",
-    "-DRB_CUDA_DIAGNOSTICS=$([string]($Diagnostics.IsPresent).ToUpper().Replace('TRUE','ON').Replace('FALSE','OFF'))"
+    "-DRB_CUDA_DIAGNOSTICS=$diagnosticsOpt"
 )
 
 if ($Generator -ne "") {
