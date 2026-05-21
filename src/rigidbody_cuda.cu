@@ -1,7 +1,11 @@
 #include "rigidbody_cuda.h"
 
 #include <cuda_runtime.h>
+#if defined(RB_CUDA_TC_USE_BF16)
+#include <cuda_bf16.h>
+#else
 #include <cuda_fp16.h>
+#endif
 #include <mma.h>
 
 #include <cmath>
@@ -10,6 +14,24 @@ namespace
 {
 
 using namespace nvcuda;
+
+#if !defined(RB_CUDA_TC_USE_FP16) && !defined(RB_CUDA_TC_USE_BF16)
+#define RB_CUDA_TC_USE_FP16 1
+#endif
+
+#if defined(RB_CUDA_TC_USE_BF16)
+using TcScalar = __nv_bfloat16;
+__device__ __forceinline__ TcScalar ToTcScalar(float v)
+{
+    return __float2bfloat16(v);
+}
+#else
+using TcScalar = __half;
+__device__ __forceinline__ TcScalar ToTcScalar(float v)
+{
+    return __float2half_rn(v);
+}
+#endif
 
 struct DeviceBuffers
 {
@@ -114,7 +136,7 @@ void AoSToSoAAsync(
 }
 
 __global__ __launch_bounds__(32, 4)
-void TensorCoreScaleBf16Kernel(
+void TensorCoreScaleTcKernel(
     const float4* __restrict__ src,
     float4* __restrict__ out,
     std::size_t count,
@@ -128,8 +150,8 @@ void TensorCoreScaleBf16Kernel(
         return;
     }
 
-    __shared__ __align__(16) __half matA[16 * 16];
-    __shared__ __align__(16) __half matB[16 * 16];
+    __shared__ __align__(16) TcScalar matA[16 * 16];
+    __shared__ __align__(16) TcScalar matB[16 * 16];
     __shared__ __align__(16) float matC[16 * 16];
 
     float warpScale = __shfl_sync(0xffffffffu, scale, 0);
@@ -139,7 +161,7 @@ void TensorCoreScaleBf16Kernel(
         int r = idx / 16;
         int c = idx % 16;
         float a = (r == c) ? warpScale : 0.0f;
-        matA[idx] = __float2half_rn(a);
+        matA[idx] = ToTcScalar(a);
     }
 
     if (lane < 16)
@@ -147,19 +169,19 @@ void TensorCoreScaleBf16Kernel(
         std::size_t gi = tileBase + static_cast<std::size_t>(lane);
         float4 s = (gi < count) ? src[gi] : make_float4(0.0f, 0.0f, 0.0f, 0.0f);
 
-        matB[lane * 16 + 0] = __float2half_rn(s.x);
-        matB[lane * 16 + 1] = __float2half_rn(s.y);
-        matB[lane * 16 + 2] = __float2half_rn(s.z);
+        matB[lane * 16 + 0] = ToTcScalar(s.x);
+        matB[lane * 16 + 1] = ToTcScalar(s.y);
+        matB[lane * 16 + 2] = ToTcScalar(s.z);
         for (int c = 3; c < 16; ++c)
         {
-            matB[lane * 16 + c] = __float2half_rn(0.0f);
+            matB[lane * 16 + c] = ToTcScalar(0.0f);
         }
     }
 
     __syncwarp();
 
-    wmma::fragment<wmma::matrix_a, 16, 16, 16, __half, wmma::row_major> aFrag;
-    wmma::fragment<wmma::matrix_b, 16, 16, 16, __half, wmma::row_major> bFrag;
+    wmma::fragment<wmma::matrix_a, 16, 16, 16, TcScalar, wmma::row_major> aFrag;
+    wmma::fragment<wmma::matrix_b, 16, 16, 16, TcScalar, wmma::row_major> bFrag;
     wmma::fragment<wmma::accumulator, 16, 16, 16, float> cFrag;
 
     wmma::load_matrix_sync(aFrag, matA, 16);
@@ -405,11 +427,11 @@ int RunBatch(
     if (err != cudaSuccess) return 12;
 
     int tcGrid = static_cast<int>((count + 15) / 16);
-    TensorCoreScaleBf16Kernel<<<tcGrid, 32>>>(d.acceleration, d.deltaVelocity, count, dt);
+    TensorCoreScaleTcKernel<<<tcGrid, 32>>>(d.acceleration, d.deltaVelocity, count, dt);
     err = cudaGetLastError();
     if (err != cudaSuccess) return 13;
 
-    TensorCoreScaleBf16Kernel<<<tcGrid, 32>>>(d.angularAcceleration, d.deltaAngularVelocity, count, dt);
+    TensorCoreScaleTcKernel<<<tcGrid, 32>>>(d.angularAcceleration, d.deltaAngularVelocity, count, dt);
     err = cudaGetLastError();
     if (err != cudaSuccess) return 14;
 

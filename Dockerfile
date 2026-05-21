@@ -11,10 +11,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /workspace
 COPY src /workspace/src
+COPY scripts /workspace/scripts
 
-RUN cmake -S /workspace/src -B /workspace/build -DCMAKE_BUILD_TYPE=Release \
- && cmake --build /workspace/build --config Release -j
+RUN chmod +x /workspace/scripts/run_gpu_test.sh
 
 # GPU smoke test (override count as needed):
-# docker run --rm --gpus all rigidbody-cuda-test /workspace/build/rigidbody_cuda_test 1048576
-CMD ["/workspace/build/rigidbody_cuda_test", "1048576"]
+# docker run --rm --gpus all rigidbody-cuda-test /workspace/scripts/run_gpu_test.sh 4194304 30
+CMD ["/workspace/scripts/run_gpu_test.sh", "4194304", "30"]

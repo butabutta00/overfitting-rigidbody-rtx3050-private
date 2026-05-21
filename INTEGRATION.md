@@ -11,7 +11,10 @@
   - Semi-Implicit Euler (`RB_CUDA_SEMI_IMPLICIT`)
   - Velocity Verlet (`RB_CUDA_VELOCITY_VERLET`)
 - Unity-side bridge is wired in `unity/Assets/Scripts/RigidBodyDynamicsLab.cs` via `DllImport("rigidbody_cuda")`.
-- Standalone CUDA test executable in `src/rigidbody_cuda_test.cu` validates GPU vs CPU reference for both methods.
+- Standalone CUDA test executable in `src/rigidbody_cuda_test.cu` validates GPU vs CPU reference for both methods and prints precision-tagged benchmark timing.
+- Two precision variants are build-configurable via CMake options:
+  - `RB_BUILD_FP16=ON/OFF`
+  - `RB_BUILD_BF16=ON/OFF`
 
 ## 2) RTX 3050 overfitting checklist mapping
 
@@ -20,12 +23,14 @@
    - PTXAS verbosity and spill/lmem warnings enabled (`-Xptxas=-v,-warn-spills,-warn-lmem-usage`).
 2. Shared Memory / L1 tuning
    - `cudaFuncSetAttribute(...PreferredSharedMemoryCarveout, 100)` used.
-   - `cudaFuncSetAttribute(...MaxDynamicSharedMemorySize, 49152)` used for async staging kernel.
-   - `cuda::memcpy_async` applied in AoS->SoA staging kernel.
+   - `cudaFuncSetAttribute(...MaxDynamicSharedMemorySize, 49152)` kept for kernel tuning compatibility.
 3. WMMA tile-based compute
-   - 16x16x16 WMMA path added (`TensorCoreScaleBf16Kernel`) for acceleration*dt / angularAcceleration*dt transforms.
-4. BF16/TF32 mixed precision
-   - BF16 used in WMMA path (`__nv_bfloat16`, `wmma::precision::bfloat16`) with FP32 accumulation.
+   - 16x16x16 WMMA path added (`TensorCoreScaleTcKernel`) for acceleration*dt / angularAcceleration*dt transforms.
+4. BF16/FP16 mixed precision variants
+   - Build-time macro selects precision path:
+     - FP16: `RB_CUDA_TC_USE_FP16=1` (`__half` + FP32 accumulation)
+     - BF16: `RB_CUDA_TC_USE_BF16=1` (`__nv_bfloat16` + FP32 accumulation)
+   - BF16 conversion uses CUDA math intrinsics (`__float2bfloat16`) per CUDA math API.
 5. Vectorized load/store
    - SoA layout uses `float4` for all state channels.
 6. Branchless programming
@@ -62,16 +67,16 @@
 
 ### Docker build
 
-From repository root `rtx3050/overfitting-rigidbody-rtx3050`:
+From repository root:
 
 ```bash
 docker build -t rigidbody-cuda-test .
 ```
 
-To run the full build-and-test flow with one command, use:
+To run the full build-and-test flow with one command (both FP16 and BF16), use:
 
 ```bash
-bash ./run_gpu_test.sh
+bash ./scripts/run_gpu_test.sh
 ```
 
 ### Docker run (requires NVIDIA Container Toolkit)
@@ -80,12 +85,15 @@ bash ./run_gpu_test.sh
 docker run --rm --gpus all rigidbody-cuda-test
 ```
 
-Optional custom particle count:
+Optional custom particle count and iterations:
 
 ```bash
-docker run --rm --gpus all rigidbody-cuda-test /workspace/build/rigidbody_cuda_test 2097152
+docker run --rm --gpus all rigidbody-cuda-test /workspace/scripts/run_gpu_test.sh 4194304 30
 ```
 
-Expected output includes:
+Expected output includes per-precision lines:
 
-- `PASS count=... methods=semi-implicit,velocity-verlet`
+- `PASS precision=fp16 count=... methods=semi-implicit,velocity-verlet`
+- `BENCH precision=fp16 iters=... total_ms=... avg_ms=...`
+- `PASS precision=bf16 count=... methods=semi-implicit,velocity-verlet`
+- `BENCH precision=bf16 iters=... total_ms=... avg_ms=...`

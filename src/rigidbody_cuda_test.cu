@@ -1,9 +1,18 @@
 #include "rigidbody_cuda.h"
 
+#include <cuda_runtime.h>
+
 #include <cmath>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <vector>
+
+#if defined(RB_CUDA_TC_USE_BF16)
+#define RB_TC_PRECISION_NAME "bf16"
+#else
+#define RB_TC_PRECISION_NAME "fp16"
+#endif
 
 namespace
 {
@@ -218,10 +227,19 @@ int main(int argc, char** argv)
 {
     std::srand(7);
 
-    std::size_t count = 1 << 20;
+    std::size_t count = 1 << 22;
+    int iters = 30;
     if (argc > 1)
     {
         count = static_cast<std::size_t>(std::atoll(argv[1]));
+    }
+    if (argc > 2)
+    {
+        iters = std::atoi(argv[2]);
+        if (iters < 1)
+        {
+            iters = 1;
+        }
     }
 
     int s1 = RunCase(count, RB_CUDA_SEMI_IMPLICIT);
@@ -229,7 +247,30 @@ int main(int argc, char** argv)
 
     if (s1 == 0 && s2 == 0)
     {
-        std::printf("PASS count=%zu methods=semi-implicit,velocity-verlet\n", count);
+        std::vector<RbCudaState> bench(count);
+        for (std::size_t i = 0; i < count; ++i)
+        {
+            FillRandom(bench[i]);
+        }
+
+        cudaDeviceSynchronize();
+        auto t0 = std::chrono::steady_clock::now();
+        for (int i = 0; i < iters; ++i)
+        {
+            int status = RbCudaStepBatch(bench.data(), count, 1.0f / 120.0f, RB_CUDA_VELOCITY_VERLET, 1, 1);
+            if (status != 0)
+            {
+                std::printf("BENCH FAIL precision=%s status=%d iter=%d\n", RB_TC_PRECISION_NAME, status, i);
+                return 1;
+            }
+        }
+        cudaDeviceSynchronize();
+        auto t1 = std::chrono::steady_clock::now();
+        const double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+        const double avgMs = ms / static_cast<double>(iters);
+
+        std::printf("PASS precision=%s count=%zu methods=semi-implicit,velocity-verlet\n", RB_TC_PRECISION_NAME, count);
+        std::printf("BENCH precision=%s iters=%d total_ms=%.3f avg_ms=%.3f\n", RB_TC_PRECISION_NAME, iters, ms, avgMs);
         return 0;
     }
 
