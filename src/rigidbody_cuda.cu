@@ -1,7 +1,6 @@
 #include "rigidbody_cuda.h"
 
 #include <cuda_runtime.h>
-#include <cuda/pipeline>
 #include <cuda_bf16.h>
 #include <mma.h>
 
@@ -99,21 +98,13 @@ void AoSToSoAAsync(
     float4* __restrict__ angularAcceleration,
     std::size_t count)
 {
-    extern __shared__ __align__(16) unsigned char smemRaw[];
-    RbCudaState* tile = reinterpret_cast<RbCudaState*>(smemRaw);
-
     std::size_t i = static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
     if (i >= count)
     {
         return;
     }
 
-    auto pipe = cuda::make_pipeline();
-    cuda::memcpy_async(&tile[threadIdx.x], &input[i], sizeof(RbCudaState), pipe);
-    cuda::pipeline_commit(pipe);
-    cuda::pipeline_wait_prior<0>(pipe);
-
-    const RbCudaState s = tile[threadIdx.x];
+    const RbCudaState s = input[i];
     position[i] = make_float4(s.position.x, s.position.y, s.position.z, s.position.w);
     rotation[i] = make_float4(s.rotation.x, s.rotation.y, s.rotation.z, s.rotation.w);
     velocity[i] = make_float4(s.velocity.x, s.velocity.y, s.velocity.z, s.velocity.w);
