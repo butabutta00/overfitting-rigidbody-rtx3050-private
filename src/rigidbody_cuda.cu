@@ -410,11 +410,7 @@ int RunBatch(
     constexpr int block = 256;
     int grid = static_cast<int>((count + block - 1) / block);
 
-    err = cudaFuncSetAttribute(AoSToSoAAsync, cudaFuncAttributePreferredSharedMemoryCarveout, 100);
-    if (err != cudaSuccess) return 12;
-    err = cudaFuncSetAttribute(AoSToSoAAsync, cudaFuncAttributeMaxDynamicSharedMemorySize, 49152);
-    if (err != cudaSuccess) return 12;
-    AoSToSoAAsync<<<grid, block, block * sizeof(RbCudaState)>>>(
+    AoSToSoAAsync<<<grid, block>>>(
         devStates,
         d.position,
         d.rotation,
