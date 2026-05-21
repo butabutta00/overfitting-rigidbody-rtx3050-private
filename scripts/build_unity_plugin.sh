@@ -5,7 +5,7 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 precision="${1:-fp16}"
 platform="${2:-linux}"
 diagnostics="${3:-off}"
-cuda_arch="${4:-86-real;86-virtual}"
+cuda_arch="${4:-61;75;86}"
 
 case "${precision}" in
     fp16)
@@ -20,7 +20,7 @@ case "${precision}" in
         ;;
     *)
         echo "Unsupported precision: ${precision}" >&2
-        echo "Usage: $0 [fp16|bf16] [linux]" >&2
+        echo "Usage: $0 [fp16|bf16] [linux] [on|off] [cuda-arch]" >&2
         exit 2
         ;;
 esac

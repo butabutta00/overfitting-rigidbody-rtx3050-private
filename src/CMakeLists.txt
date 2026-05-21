@@ -13,15 +13,19 @@ endif()
 # Use shared CUDA runtime on Windows to avoid LIBCMT vs /MD conflicts (LNK4098).
 set(CMAKE_CUDA_RUNTIME_LIBRARY Shared)
 
-# RTX 3050 (Ampere): SM 86
-# Build both SASS and PTX so runtime has a compatible image path.
-set(RB_CUDA_ARCHITECTURES "86-real;86-virtual" CACHE STRING "CUDA architectures for kernel code generation")
+# Default targets:
+# - SM 61 (Pascal): GTX 1050 / GTX 1650 / GTX 950 / GTX 960
+# - SM 75 (Turing): RTX 2060 / RTX 2070 / RTX 2080
+# - SM 86 (Ampere): RTX 3050
+set(RB_CUDA_ARCHITECTURES "61;75;86" CACHE STRING "CUDA architectures to build for")
 set(CMAKE_CUDA_ARCHITECTURES ${RB_CUDA_ARCHITECTURES})
 set(RB_CUDA_FORCE_GENCODE ON CACHE BOOL "Force explicit -gencode flags for runtime image compatibility")
 
 message(STATUS "CMAKE_CUDA_ARCHITECTURES=${CMAKE_CUDA_ARCHITECTURES}")
 
 set(RB_CUDA_GENCODE_FLAGS
+    -gencode=arch=compute_61,code=sm_61
+    -gencode=arch=compute_75,code=sm_75
     -gencode=arch=compute_86,code=sm_86
     -gencode=arch=compute_86,code=compute_86)
 
