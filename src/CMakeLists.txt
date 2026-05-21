@@ -6,7 +6,11 @@ set(CMAKE_CUDA_STANDARD 17)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 # RTX 3050 (Ampere): SM 86
-set(CMAKE_CUDA_ARCHITECTURES 86)
+# Build both SASS and PTX so runtime has a compatible image path.
+set(RB_CUDA_ARCHITECTURES "86-real;86-virtual" CACHE STRING "CUDA architectures for kernel code generation")
+set(CMAKE_CUDA_ARCHITECTURES ${RB_CUDA_ARCHITECTURES})
+
+message(STATUS "CMAKE_CUDA_ARCHITECTURES=${CMAKE_CUDA_ARCHITECTURES}")
 
 option(RB_BUILD_FP16 "Build FP16 tensor-core variant" ON)
 option(RB_BUILD_BF16 "Build BF16 tensor-core variant" ON)

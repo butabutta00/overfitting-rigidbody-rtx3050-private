@@ -7,6 +7,8 @@ param(
 
     [switch]$Diagnostics,
 
+    [string]$CudaArch = "86-real;86-virtual",
+
     [string]$Generator = "",
 
     [string]$Arch = "x64"
@@ -43,7 +45,8 @@ $configureArgs = @(
     "-B", $buildDir,
     "-DRB_BUILD_FP16=$fpOpt",
     "-DRB_BUILD_BF16=$bfOpt",
-    "-DRB_CUDA_DIAGNOSTICS=$diagnosticsOpt"
+    "-DRB_CUDA_DIAGNOSTICS=$diagnosticsOpt",
+    "-DRB_CUDA_ARCHITECTURES=$CudaArch"
 )
 
 if ($Generator -ne "") {
@@ -80,5 +83,5 @@ if ($null -eq $dllPath) {
 $dstPath = Join-Path $pluginDir $unityDllName
 Copy-Item -Force $dllPath $dstPath
 
-Write-Host "Built Unity plugin precision=$Precision diagnostics=$($Diagnostics.IsPresent)"
+Write-Host "Built Unity plugin precision=$Precision diagnostics=$($Diagnostics.IsPresent) arch=$CudaArch"
 Write-Host "Copied: $dstPath"
