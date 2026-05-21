@@ -40,7 +40,7 @@ function(rb_add_variant variant precision_def)
         $<$<BOOL:${RB_CUDA_DIAGNOSTICS}>:RB_CUDA_DIAGNOSTICS=1>
     )
     set_target_properties(${lib_target} PROPERTIES
-        CUDA_SEPARABLE_COMPILATION OFF
+        CUDA_SEPARABLE_COMPILATION ON
         CUDA_RESOLVE_DEVICE_SYMBOLS ON
     )
 
