@@ -1,4 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
+set(RB_CUDA_ARCHITECTURES "86-real;86-virtual" CACHE STRING "CUDA architectures for kernel code generation")
+set(CMAKE_CUDA_ARCHITECTURES "${RB_CUDA_ARCHITECTURES}")
+
 project(rigidbody_cuda LANGUAGES CXX CUDA)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -7,8 +10,6 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 # RTX 3050 (Ampere): SM 86
 # Build both SASS and PTX so runtime has a compatible image path.
-set(RB_CUDA_ARCHITECTURES "86-real;86-virtual" CACHE STRING "CUDA architectures for kernel code generation")
-set(CMAKE_CUDA_ARCHITECTURES ${RB_CUDA_ARCHITECTURES})
 set(RB_CUDA_FORCE_GENCODE ON CACHE BOOL "Force explicit -gencode flags for runtime image compatibility")
 
 message(STATUS "CMAKE_CUDA_ARCHITECTURES=${CMAKE_CUDA_ARCHITECTURES}")
@@ -40,7 +41,7 @@ function(rb_add_variant variant precision_def)
     )
     set_target_properties(${lib_target} PROPERTIES
         CUDA_SEPARABLE_COMPILATION OFF
-        CUDA_RESOLVE_DEVICE_SYMBOLS OFF
+        CUDA_RESOLVE_DEVICE_SYMBOLS ON
     )
 
     target_compile_options(${lib_target} PRIVATE
