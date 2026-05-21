@@ -108,15 +108,10 @@ void AoSToSoAAsync(
         return;
     }
 
-#if __CUDA_ARCH__ >= 800
     auto pipe = cuda::make_pipeline();
     cuda::memcpy_async(&tile[threadIdx.x], &input[i], sizeof(RbCudaState), pipe);
-    pipe.producer_commit();
-    pipe.consumer_wait();
-    pipe.consumer_release();
-#else
-    tile[threadIdx.x] = input[i];
-#endif
+    cuda::pipeline_commit(pipe);
+    cuda::pipeline_wait_prior<0>(pipe);
 
     const RbCudaState s = tile[threadIdx.x];
     position[i] = make_float4(s.position.x, s.position.y, s.position.z, s.position.w);
