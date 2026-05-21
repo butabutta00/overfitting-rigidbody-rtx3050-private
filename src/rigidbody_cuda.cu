@@ -1,7 +1,7 @@
 #include "rigidbody_cuda.h"
 
 #include <cuda_runtime.h>
-#include <cuda_bf16.h>
+#include <cuda_fp16.h>
 #include <mma.h>
 
 #include <cmath>
@@ -128,8 +128,8 @@ void TensorCoreScaleBf16Kernel(
         return;
     }
 
-    __shared__ __align__(16) __nv_bfloat16 matA[16 * 16];
-    __shared__ __align__(16) __nv_bfloat16 matB[16 * 16];
+    __shared__ __align__(16) __half matA[16 * 16];
+    __shared__ __align__(16) __half matB[16 * 16];
     __shared__ __align__(16) float matC[16 * 16];
 
     float warpScale = __shfl_sync(0xffffffffu, scale, 0);
@@ -139,7 +139,7 @@ void TensorCoreScaleBf16Kernel(
         int r = idx / 16;
         int c = idx % 16;
         float a = (r == c) ? warpScale : 0.0f;
-        matA[idx] = __float2bfloat16(a);
+        matA[idx] = __float2half_rn(a);
     }
 
     if (lane < 16)
@@ -147,19 +147,19 @@ void TensorCoreScaleBf16Kernel(
         std::size_t gi = tileBase + static_cast<std::size_t>(lane);
         float4 s = (gi < count) ? src[gi] : make_float4(0.0f, 0.0f, 0.0f, 0.0f);
 
-        matB[lane * 16 + 0] = __float2bfloat16(s.x);
-        matB[lane * 16 + 1] = __float2bfloat16(s.y);
-        matB[lane * 16 + 2] = __float2bfloat16(s.z);
+        matB[lane * 16 + 0] = __float2half_rn(s.x);
+        matB[lane * 16 + 1] = __float2half_rn(s.y);
+        matB[lane * 16 + 2] = __float2half_rn(s.z);
         for (int c = 3; c < 16; ++c)
         {
-            matB[lane * 16 + c] = __float2bfloat16(0.0f);
+            matB[lane * 16 + c] = __float2half_rn(0.0f);
         }
     }
 
     __syncwarp();
 
-    wmma::fragment<wmma::matrix_a, 16, 16, 16, wmma::precision::bfloat16, wmma::row_major> aFrag;
-    wmma::fragment<wmma::matrix_b, 16, 16, 16, wmma::precision::bfloat16, wmma::row_major> bFrag;
+    wmma::fragment<wmma::matrix_a, 16, 16, 16, __half, wmma::row_major> aFrag;
+    wmma::fragment<wmma::matrix_b, 16, 16, 16, __half, wmma::row_major> bFrag;
     wmma::fragment<wmma::accumulator, 16, 16, 16, float> cFrag;
 
     wmma::load_matrix_sync(aFrag, matA, 16);
