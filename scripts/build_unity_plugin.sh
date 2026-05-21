@@ -4,6 +4,7 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 precision="${1:-fp16}"
 platform="${2:-linux}"
+diagnostics="${3:-off}"
 
 case "${precision}" in
     fp16)
@@ -23,6 +24,15 @@ case "${precision}" in
         ;;
 esac
 
+diag_opt="OFF"
+if [[ "${diagnostics}" == "on" ]]; then
+    diag_opt="ON"
+elif [[ "${diagnostics}" != "off" ]]; then
+    echo "Unsupported diagnostics option: ${diagnostics}" >&2
+    echo "Usage: $0 [fp16|bf16] [linux] [on|off]" >&2
+    exit 4
+fi
+
 if [[ "${platform}" != "linux" ]]; then
     echo "Unsupported platform: ${platform}" >&2
     echo "Currently only linux output is scripted." >&2
@@ -35,7 +45,8 @@ plugin_dir="${repo_root}/unity/Assets/Plugins/x86_64"
 cmake -S "${repo_root}/src" -B "${build_dir}" \
     -DCMAKE_BUILD_TYPE=Release \
     -DRB_BUILD_FP16="${fp_opt}" \
-    -DRB_BUILD_BF16="${bf_opt}"
+    -DRB_BUILD_BF16="${bf_opt}" \
+    -DRB_CUDA_DIAGNOSTICS="${diag_opt}"
 
 cmake --build "${build_dir}" --config Release -j
 
@@ -47,5 +58,5 @@ else
     cp "${build_dir}/${lib_name}" "${plugin_dir}/librigidbody_cuda_bf.so"
 fi
 
-echo "Built Unity plugin precision=${precision}"
+echo "Built Unity plugin precision=${precision} diagnostics=${diagnostics}"
 echo "Output: ${plugin_dir}"

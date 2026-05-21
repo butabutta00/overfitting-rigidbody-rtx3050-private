@@ -9,6 +9,7 @@
 #include <mma.h>
 
 #include <cmath>
+#include <cstdio>
 
 namespace
 {
@@ -44,6 +45,50 @@ struct DeviceBuffers
     float4* deltaVelocity;
     float4* deltaAngularVelocity;
 };
+
+int g_debugEnabled = 0;
+int g_lastStage = 0;
+int g_lastCudaError = 0;
+char g_lastErrorString[512] = "ok";
+
+void SetDebugState(int stage, cudaError_t err, const char* detail)
+{
+    g_lastStage = stage;
+    g_lastCudaError = static_cast<int>(err);
+
+    const char* cudaName = cudaGetErrorName(err);
+    const char* cudaDesc = cudaGetErrorString(err);
+    if (cudaName == nullptr)
+    {
+        cudaName = "UnknownCudaError";
+    }
+    if (cudaDesc == nullptr)
+    {
+        cudaDesc = "No description";
+    }
+
+    std::snprintf(
+        g_lastErrorString,
+        sizeof(g_lastErrorString),
+        "stage=%d code=%d cuda=%s desc=%s detail=%s",
+        stage,
+        static_cast<int>(err),
+        cudaName,
+        cudaDesc,
+        (detail != nullptr) ? detail : "-");
+}
+
+int RetError(int code, int stage, cudaError_t err, const char* detail)
+{
+    SetDebugState(stage, err, detail);
+    return code;
+}
+
+int RetCodeOnly(int code, int stage, const char* detail)
+{
+    SetDebugState(stage, cudaSuccess, detail);
+    return code;
+}
 
 __device__ __forceinline__ float3 MakeFloat3(float x, float y, float z)
 {
@@ -373,9 +418,10 @@ int RunBatch(
     int enableTranslation,
     int enableRotation)
 {
+    SetDebugState(0, cudaSuccess, "begin");
     if (ioStates == nullptr || count == 0)
     {
-        return 1;
+        return RetCodeOnly(1, 1, "invalid-input");
     }
 
     const std::size_t stateBytes = sizeof(RbCudaState) * count;
@@ -385,27 +431,27 @@ int RunBatch(
     DeviceBuffers d = {};
 
     cudaError_t err = cudaMalloc(&devStates, stateBytes);
-    if (err != cudaSuccess) return 2;
+    if (err != cudaSuccess) return RetError(2, 2, err, "cudaMalloc-devStates");
 
     err = cudaMalloc(&d.position, vecBytes);
-    if (err != cudaSuccess) return 3;
+    if (err != cudaSuccess) return RetError(3, 3, err, "cudaMalloc-position");
     err = cudaMalloc(&d.rotation, vecBytes);
-    if (err != cudaSuccess) return 4;
+    if (err != cudaSuccess) return RetError(4, 4, err, "cudaMalloc-rotation");
     err = cudaMalloc(&d.velocity, vecBytes);
-    if (err != cudaSuccess) return 5;
+    if (err != cudaSuccess) return RetError(5, 5, err, "cudaMalloc-velocity");
     err = cudaMalloc(&d.angularVelocity, vecBytes);
-    if (err != cudaSuccess) return 6;
+    if (err != cudaSuccess) return RetError(6, 6, err, "cudaMalloc-angularVelocity");
     err = cudaMalloc(&d.acceleration, vecBytes);
-    if (err != cudaSuccess) return 7;
+    if (err != cudaSuccess) return RetError(7, 7, err, "cudaMalloc-acceleration");
     err = cudaMalloc(&d.angularAcceleration, vecBytes);
-    if (err != cudaSuccess) return 8;
+    if (err != cudaSuccess) return RetError(8, 8, err, "cudaMalloc-angularAcceleration");
     err = cudaMalloc(&d.deltaVelocity, vecBytes);
-    if (err != cudaSuccess) return 9;
+    if (err != cudaSuccess) return RetError(9, 9, err, "cudaMalloc-deltaVelocity");
     err = cudaMalloc(&d.deltaAngularVelocity, vecBytes);
-    if (err != cudaSuccess) return 10;
+    if (err != cudaSuccess) return RetError(10, 10, err, "cudaMalloc-deltaAngularVelocity");
 
     err = cudaMemcpy(devStates, ioStates, stateBytes, cudaMemcpyHostToDevice);
-    if (err != cudaSuccess) return 11;
+    if (err != cudaSuccess) return RetError(11, 11, err, "cudaMemcpy-H2D-states");
 
     constexpr int integrateBlock = 256;
     const int grid = static_cast<int>((count + integrateBlock - 1) / integrateBlock);
@@ -439,16 +485,16 @@ int RunBatch(
             count);
         err = cudaGetLastError();
     }
-    if (err != cudaSuccess) return 12;
+    if (err != cudaSuccess) return RetError(12, 12, err, "AoSToSoA-launch");
 
     int tcGrid = static_cast<int>((count + 15) / 16);
     TensorCoreScaleTcKernel<<<tcGrid, 32>>>(d.acceleration, d.deltaVelocity, count, dt);
     err = cudaGetLastError();
-    if (err != cudaSuccess) return 13;
+    if (err != cudaSuccess) return RetError(13, 13, err, "TensorCoreScale-deltaVelocity");
 
     TensorCoreScaleTcKernel<<<tcGrid, 32>>>(d.angularAcceleration, d.deltaAngularVelocity, count, dt);
     err = cudaGetLastError();
-    if (err != cudaSuccess) return 14;
+    if (err != cudaSuccess) return RetError(14, 14, err, "TensorCoreScale-deltaAngularVelocity");
 
     cudaResourceDesc accelRes = {};
     accelRes.resType = cudaResourceTypeLinear;
@@ -469,12 +515,15 @@ int RunBatch(
     cudaTextureObject_t angularAccelerationTex = 0;
 
     err = cudaCreateTextureObject(&accelerationTex, &accelRes, &texDesc, nullptr);
-    if (err != cudaSuccess) return 15;
+    if (err != cudaSuccess) return RetError(15, 15, err, "cudaCreateTextureObject-accel");
     err = cudaCreateTextureObject(&angularAccelerationTex, &alphaRes, &texDesc, nullptr);
-    if (err != cudaSuccess) return 16;
+    if (err != cudaSuccess) return RetError(16, 16, err, "cudaCreateTextureObject-angular");
 
     err = cudaFuncSetAttribute(IntegrateKernel, cudaFuncAttributePreferredSharedMemoryCarveout, 100);
-    if (err != cudaSuccess) return 17;
+    if (err != cudaSuccess && g_debugEnabled != 0)
+    {
+        SetDebugState(17, err, "IntegrateKernel-PreferredSharedMemoryCarveout-ignored");
+    }
     IntegrateKernel<<<grid, integrateBlock>>>(
         d.position,
         d.rotation,
@@ -490,7 +539,7 @@ int RunBatch(
         enableTranslation,
         enableRotation);
     err = cudaGetLastError();
-    if (err != cudaSuccess) return 17;
+    if (err != cudaSuccess) return RetError(17, 17, err, "Integrate-launch");
 
     SoAToAoS<<<grid, integrateBlock>>>(
         d.position,
@@ -500,13 +549,13 @@ int RunBatch(
         devStates,
         count);
     err = cudaGetLastError();
-    if (err != cudaSuccess) return 18;
+    if (err != cudaSuccess) return RetError(18, 18, err, "SoAToAoS-launch");
 
     err = cudaMemcpy(ioStates, devStates, stateBytes, cudaMemcpyDeviceToHost);
-    if (err != cudaSuccess) return 19;
+    if (err != cudaSuccess) return RetError(19, 19, err, "cudaMemcpy-D2H-states");
 
     err = cudaDeviceSynchronize();
-    if (err != cudaSuccess) return 20;
+    if (err != cudaSuccess) return RetError(20, 20, err, "cudaDeviceSynchronize");
 
     cudaDestroyTextureObject(angularAccelerationTex);
     cudaDestroyTextureObject(accelerationTex);
@@ -520,6 +569,7 @@ int RunBatch(
     cudaFree(d.rotation);
     cudaFree(d.position);
     cudaFree(devStates);
+    SetDebugState(100, cudaSuccess, "ok");
     return 0;
 }
 
@@ -544,4 +594,19 @@ extern "C" int RbCudaStepBatch(
     int enableRotation)
 {
     return RunBatch(ioStates, count, dt, integrationMethod, enableTranslation, enableRotation);
+}
+
+extern "C" const char* RbCudaGetLastErrorString()
+{
+    return g_lastErrorString;
+}
+
+extern "C" int RbCudaGetLastCudaErrorCode()
+{
+    return g_lastCudaError;
+}
+
+extern "C" void RbCudaEnableDebug(int enabled)
+{
+    g_debugEnabled = (enabled != 0) ? 1 : 0;
 }

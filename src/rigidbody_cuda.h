@@ -54,4 +54,8 @@ RB_CUDA_API int RbCudaStepBatch(
     int enableTranslation,
     int enableRotation);
 
+RB_CUDA_API const char* RbCudaGetLastErrorString();
+RB_CUDA_API int RbCudaGetLastCudaErrorCode();
+RB_CUDA_API void RbCudaEnableDebug(int enabled);
+
 }

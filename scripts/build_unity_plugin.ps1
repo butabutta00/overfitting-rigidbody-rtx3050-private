@@ -5,6 +5,8 @@ param(
     [ValidateSet("Debug", "Release", "RelWithDebInfo", "MinSizeRel")]
     [string]$Configuration = "Release",
 
+    [switch]$Diagnostics,
+
     [string]$Generator = "",
 
     [string]$Arch = "x64"
@@ -38,7 +40,8 @@ $configureArgs = @(
     "-S", (Join-Path $repoRoot "src"),
     "-B", $buildDir,
     "-DRB_BUILD_FP16=$fpOpt",
-    "-DRB_BUILD_BF16=$bfOpt"
+    "-DRB_BUILD_BF16=$bfOpt",
+    "-DRB_CUDA_DIAGNOSTICS=$([string]($Diagnostics.IsPresent).ToUpper().Replace('TRUE','ON').Replace('FALSE','OFF'))"
 )
 
 if ($Generator -ne "") {
@@ -75,5 +78,5 @@ if ($null -eq $dllPath) {
 $dstPath = Join-Path $pluginDir $unityDllName
 Copy-Item -Force $dllPath $dstPath
 
-Write-Host "Built Unity plugin precision=$Precision"
+Write-Host "Built Unity plugin precision=$Precision diagnostics=$($Diagnostics.IsPresent)"
 Write-Host "Copied: $dstPath"

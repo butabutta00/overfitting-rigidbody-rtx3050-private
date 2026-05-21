@@ -10,6 +10,7 @@ set(CMAKE_CUDA_ARCHITECTURES 86)
 
 option(RB_BUILD_FP16 "Build FP16 tensor-core variant" ON)
 option(RB_BUILD_BF16 "Build BF16 tensor-core variant" ON)
+option(RB_CUDA_DIAGNOSTICS "Enable CUDA diagnostics exports" OFF)
 
 if (NOT RB_BUILD_FP16 AND NOT RB_BUILD_BF16)
     message(FATAL_ERROR "Enable at least one variant: RB_BUILD_FP16 or RB_BUILD_BF16")
@@ -26,6 +27,7 @@ function(rb_add_variant variant precision_def)
     target_compile_definitions(${lib_target} PRIVATE
         RB_CUDA_EXPORTS
         ${precision_def}
+        $<$<BOOL:${RB_CUDA_DIAGNOSTICS}>:RB_CUDA_DIAGNOSTICS=1>
     )
     set_target_properties(${lib_target} PROPERTIES
         CUDA_SEPARABLE_COMPILATION ON

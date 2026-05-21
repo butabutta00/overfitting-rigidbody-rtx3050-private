@@ -15,6 +15,7 @@ public class RigidBodyDynamicsLab : MonoBehaviour
 
     [Header("CUDA Integration")]
     public bool useCudaIntegration = true;
+    public bool cudaDebugDiagnostics = false;
 
     [Header("Dynamics Toggle")]
     public bool enableTranslation = true;
@@ -64,6 +65,24 @@ public class RigidBodyDynamicsLab : MonoBehaviour
     [DllImport("rigidbody_cuda_bf", EntryPoint = "RbCudaStepSingle")]
     private static extern int RbCudaStepSingleBf(ref CudaRigidBodyState state, float dt, int integrationMethod, int enableTranslation, int enableRotation);
 
+    [DllImport("rigidbody_cuda", EntryPoint = "RbCudaGetLastErrorString")]
+    private static extern IntPtr RbCudaGetLastErrorStringFp();
+
+    [DllImport("rigidbody_cuda_bf", EntryPoint = "RbCudaGetLastErrorString")]
+    private static extern IntPtr RbCudaGetLastErrorStringBf();
+
+    [DllImport("rigidbody_cuda", EntryPoint = "RbCudaGetLastCudaErrorCode")]
+    private static extern int RbCudaGetLastCudaErrorCodeFp();
+
+    [DllImport("rigidbody_cuda_bf", EntryPoint = "RbCudaGetLastCudaErrorCode")]
+    private static extern int RbCudaGetLastCudaErrorCodeBf();
+
+    [DllImport("rigidbody_cuda", EntryPoint = "RbCudaEnableDebug")]
+    private static extern void RbCudaEnableDebugFp(int enabled);
+
+    [DllImport("rigidbody_cuda_bf", EntryPoint = "RbCudaEnableDebug")]
+    private static extern void RbCudaEnableDebugBf(int enabled);
+
     private static int RbCudaStepSingleBridge(ref CudaRigidBodyState state, float dt, int integrationMethod, int enableTranslation, int enableRotation)
     {
 #if RB_CUDA_BF16
@@ -71,6 +90,34 @@ public class RigidBodyDynamicsLab : MonoBehaviour
 #else
         return RbCudaStepSingleFp(ref state, dt, integrationMethod, enableTranslation, enableRotation);
 #endif
+    }
+
+    private static void RbCudaEnableDebugBridge(int enabled)
+    {
+#if RB_CUDA_BF16
+        RbCudaEnableDebugBf(enabled);
+#else
+        RbCudaEnableDebugFp(enabled);
+#endif
+    }
+
+    private static int RbCudaGetLastCudaErrorCodeBridge()
+    {
+#if RB_CUDA_BF16
+        return RbCudaGetLastCudaErrorCodeBf();
+#else
+        return RbCudaGetLastCudaErrorCodeFp();
+#endif
+    }
+
+    private static string RbCudaGetLastErrorStringBridge()
+    {
+#if RB_CUDA_BF16
+        IntPtr ptr = RbCudaGetLastErrorStringBf();
+#else
+        IntPtr ptr = RbCudaGetLastErrorStringFp();
+#endif
+        return ptr == IntPtr.Zero ? string.Empty : Marshal.PtrToStringAnsi(ptr);
     }
 
     private void Start()
@@ -195,10 +242,13 @@ public class RigidBodyDynamicsLab : MonoBehaviour
 
         try
         {
+            RbCudaEnableDebugBridge(cudaDebugDiagnostics ? 1 : 0);
             int status = RbCudaStepSingleBridge(ref state, dt, integrationMethod, enableTranslation ? 1 : 0, enableRotation ? 1 : 0);
             if (status != 0)
             {
-                Debug.LogWarning($"CUDA integration failed with status={status}. Falling back to CPU.");
+                int cudaCode = RbCudaGetLastCudaErrorCodeBridge();
+                string cudaDetail = RbCudaGetLastErrorStringBridge();
+                Debug.LogWarning($"CUDA integration failed status={status} cudaCode={cudaCode} detail={cudaDetail}. Falling back to CPU.");
                 return false;
             }
         }
