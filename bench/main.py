@@ -44,7 +44,7 @@ def extract_bench(output: str) -> dict[str, float]:
 
 
 def run_script(script: Path, count: int, iters: int) -> dict[str, float]:
-    command = [str(script), str(count), str(iters)]
+    command = ["bash", str(script), str(count), str(iters)]
     proc = subprocess.run(command, check=False, text=True, capture_output=True)
     if proc.returncode != 0:
         raise RuntimeError(
