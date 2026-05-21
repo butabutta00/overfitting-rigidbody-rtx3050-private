@@ -60,7 +60,7 @@ if ($Generator -notlike "*Visual Studio*") {
     $configureArgs += @("-DCMAKE_BUILD_TYPE=$Configuration")
 }
 
-& cmake @configureArgs
+& cmake --fresh @configureArgs
 & cmake --build $buildDir --config $Configuration --parallel
 
 $candidatePaths = @(

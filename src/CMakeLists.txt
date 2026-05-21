@@ -9,8 +9,13 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 # Build both SASS and PTX so runtime has a compatible image path.
 set(RB_CUDA_ARCHITECTURES "86-real;86-virtual" CACHE STRING "CUDA architectures for kernel code generation")
 set(CMAKE_CUDA_ARCHITECTURES ${RB_CUDA_ARCHITECTURES})
+set(RB_CUDA_FORCE_GENCODE ON CACHE BOOL "Force explicit -gencode flags for runtime image compatibility")
 
 message(STATUS "CMAKE_CUDA_ARCHITECTURES=${CMAKE_CUDA_ARCHITECTURES}")
+
+set(RB_CUDA_GENCODE_FLAGS
+    -gencode=arch=compute_86,code=sm_86
+    -gencode=arch=compute_86,code=compute_86)
 
 option(RB_BUILD_FP16 "Build FP16 tensor-core variant" ON)
 option(RB_BUILD_BF16 "Build BF16 tensor-core variant" ON)
@@ -40,6 +45,7 @@ function(rb_add_variant variant precision_def)
 
     target_compile_options(${lib_target} PRIVATE
         $<$<COMPILE_LANGUAGE:CUDA>:-O3 --use_fast_math -lineinfo -Xptxas=-v,-dlcm=ca,-warn-spills,-warn-lmem-usage>
+        $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<BOOL:${RB_CUDA_FORCE_GENCODE}>>:${RB_CUDA_GENCODE_FLAGS}>
     )
 
     add_executable(${test_target}
@@ -51,6 +57,7 @@ function(rb_add_variant variant precision_def)
 
     target_compile_options(${test_target} PRIVATE
         $<$<COMPILE_LANGUAGE:CUDA>:-O3 --use_fast_math -lineinfo -Xptxas=-v,-dlcm=ca,-warn-spills,-warn-lmem-usage>
+        $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<BOOL:${RB_CUDA_FORCE_GENCODE}>>:${RB_CUDA_GENCODE_FLAGS}>
     )
 
     if (variant STREQUAL "fp")

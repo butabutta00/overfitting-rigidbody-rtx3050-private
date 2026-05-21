@@ -43,7 +43,7 @@ fi
 build_dir="${repo_root}/build-unity-${precision}"
 plugin_dir="${repo_root}/unity/Assets/Plugins/x86_64"
 
-cmake -S "${repo_root}/src" -B "${build_dir}" \
+cmake --fresh -S "${repo_root}/src" -B "${build_dir}" \
     -DCMAKE_BUILD_TYPE=Release \
     -DRB_BUILD_FP16="${fp_opt}" \
     -DRB_BUILD_BF16="${bf_opt}" \
