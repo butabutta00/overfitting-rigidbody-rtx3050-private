@@ -11,7 +11,7 @@
 #include <cmath>
 #include <cstdio>
 
-namespace
+namespace rbcuda
 {
 
 using namespace nvcuda;
@@ -25,7 +25,7 @@ using TcScalar = __nv_bfloat16;
 __device__ __forceinline__ TcScalar ToTcScalar(float v)
 {
     return __float2bfloat16(v);
-}
+} // namespace rbcuda
 #else
 using TcScalar = __half;
 __device__ __forceinline__ TcScalar ToTcScalar(float v)
@@ -155,7 +155,7 @@ __device__ __forceinline__ float Select3(float expV, float siV, float vvV, float
 }
 
 __global__
-void AoSToSoAAsync(
+void RbAoSToSoAKernel(
     const RbCudaState* __restrict__ input,
     float4* __restrict__ position,
     float4* __restrict__ rotation,
@@ -181,7 +181,7 @@ void AoSToSoAAsync(
 }
 
 __global__ __launch_bounds__(32, 4)
-void TensorCoreScaleTcKernel(
+void RbTensorCoreScaleTcKernel(
     const float4* __restrict__ src,
     float4* __restrict__ out,
     std::size_t count,
@@ -259,7 +259,7 @@ void TensorCoreScaleTcKernel(
 }
 
 __global__ __launch_bounds__(256, 2)
-void IntegrateKernel(
+void RbIntegrateKernel(
     float4* __restrict__ position,
     float4* __restrict__ rotation,
     float4* __restrict__ velocity,
@@ -383,7 +383,7 @@ void IntegrateKernel(
 }
 
 __global__ __launch_bounds__(256, 2)
-void SoAToAoS(
+void RbSoAToAoSKernel(
     const float4* __restrict__ position,
     const float4* __restrict__ rotation,
     const float4* __restrict__ velocity,
@@ -459,7 +459,7 @@ int RunBatch(
     cudaGetLastError();
     int aosBlock = 256;
     int aosGrid = static_cast<int>((count + static_cast<std::size_t>(aosBlock) - 1) / static_cast<std::size_t>(aosBlock));
-    AoSToSoAAsync<<<aosGrid, aosBlock>>>(
+    RbAoSToSoAKernel<<<aosGrid, aosBlock>>>(
         devStates,
         d.position,
         d.rotation,
@@ -474,7 +474,7 @@ int RunBatch(
         cudaGetLastError();
         aosBlock = 128;
         aosGrid = static_cast<int>((count + static_cast<std::size_t>(aosBlock) - 1) / static_cast<std::size_t>(aosBlock));
-        AoSToSoAAsync<<<aosGrid, aosBlock>>>(
+        RbAoSToSoAKernel<<<aosGrid, aosBlock>>>(
             devStates,
             d.position,
             d.rotation,
@@ -488,11 +488,11 @@ int RunBatch(
     if (err != cudaSuccess) return RetError(12, 12, err, "AoSToSoA-launch");
 
     int tcGrid = static_cast<int>((count + 15) / 16);
-    TensorCoreScaleTcKernel<<<tcGrid, 32>>>(d.acceleration, d.deltaVelocity, count, dt);
+    RbTensorCoreScaleTcKernel<<<tcGrid, 32>>>(d.acceleration, d.deltaVelocity, count, dt);
     err = cudaGetLastError();
     if (err != cudaSuccess) return RetError(13, 13, err, "TensorCoreScale-deltaVelocity");
 
-    TensorCoreScaleTcKernel<<<tcGrid, 32>>>(d.angularAcceleration, d.deltaAngularVelocity, count, dt);
+    RbTensorCoreScaleTcKernel<<<tcGrid, 32>>>(d.angularAcceleration, d.deltaAngularVelocity, count, dt);
     err = cudaGetLastError();
     if (err != cudaSuccess) return RetError(14, 14, err, "TensorCoreScale-deltaAngularVelocity");
 
@@ -519,12 +519,12 @@ int RunBatch(
     err = cudaCreateTextureObject(&angularAccelerationTex, &alphaRes, &texDesc, nullptr);
     if (err != cudaSuccess) return RetError(16, 16, err, "cudaCreateTextureObject-angular");
 
-    err = cudaFuncSetAttribute(IntegrateKernel, cudaFuncAttributePreferredSharedMemoryCarveout, 100);
+    err = cudaFuncSetAttribute(RbIntegrateKernel, cudaFuncAttributePreferredSharedMemoryCarveout, 100);
     if (err != cudaSuccess && g_debugEnabled != 0)
     {
         SetDebugState(17, err, "IntegrateKernel-PreferredSharedMemoryCarveout-ignored");
     }
-    IntegrateKernel<<<grid, integrateBlock>>>(
+    RbIntegrateKernel<<<grid, integrateBlock>>>(
         d.position,
         d.rotation,
         d.velocity,
@@ -541,7 +541,7 @@ int RunBatch(
     err = cudaGetLastError();
     if (err != cudaSuccess) return RetError(17, 17, err, "Integrate-launch");
 
-    SoAToAoS<<<grid, integrateBlock>>>(
+    RbSoAToAoSKernel<<<grid, integrateBlock>>>(
         d.position,
         d.rotation,
         d.velocity,
@@ -582,7 +582,7 @@ extern "C" int RbCudaStepSingle(
     int enableTranslation,
     int enableRotation)
 {
-    return RunBatch(ioState, 1, dt, integrationMethod, enableTranslation, enableRotation);
+    return rbcuda::RunBatch(ioState, 1, dt, integrationMethod, enableTranslation, enableRotation);
 }
 
 extern "C" int RbCudaStepBatch(
@@ -593,20 +593,20 @@ extern "C" int RbCudaStepBatch(
     int enableTranslation,
     int enableRotation)
 {
-    return RunBatch(ioStates, count, dt, integrationMethod, enableTranslation, enableRotation);
+    return rbcuda::RunBatch(ioStates, count, dt, integrationMethod, enableTranslation, enableRotation);
 }
 
 extern "C" const char* RbCudaGetLastErrorString()
 {
-    return g_lastErrorString;
+    return rbcuda::g_lastErrorString;
 }
 
 extern "C" int RbCudaGetLastCudaErrorCode()
 {
-    return g_lastCudaError;
+    return rbcuda::g_lastCudaError;
 }
 
 extern "C" void RbCudaEnableDebug(int enabled)
 {
-    g_debugEnabled = (enabled != 0) ? 1 : 0;
+    rbcuda::g_debugEnabled = (enabled != 0) ? 1 : 0;
 }
