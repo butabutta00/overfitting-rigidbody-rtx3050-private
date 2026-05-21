@@ -109,7 +109,7 @@ __device__ __forceinline__ float Select3(float expV, float siV, float vvV, float
     return expV * mExp + siV * mSi + vvV * mVv;
 }
 
-__global__ __launch_bounds__(256, 2)
+__global__
 void AoSToSoAAsync(
     const RbCudaState* __restrict__ input,
     float4* __restrict__ position,
@@ -407,10 +407,13 @@ int RunBatch(
     err = cudaMemcpy(devStates, ioStates, stateBytes, cudaMemcpyHostToDevice);
     if (err != cudaSuccess) return 11;
 
-    constexpr int block = 256;
-    int grid = static_cast<int>((count + block - 1) / block);
+    constexpr int integrateBlock = 256;
+    const int grid = static_cast<int>((count + integrateBlock - 1) / integrateBlock);
 
-    AoSToSoAAsync<<<grid, block>>>(
+    cudaGetLastError();
+    int aosBlock = 256;
+    int aosGrid = static_cast<int>((count + static_cast<std::size_t>(aosBlock) - 1) / static_cast<std::size_t>(aosBlock));
+    AoSToSoAAsync<<<aosGrid, aosBlock>>>(
         devStates,
         d.position,
         d.rotation,
@@ -420,6 +423,22 @@ int RunBatch(
         d.angularAcceleration,
         count);
     err = cudaGetLastError();
+    if (err == cudaErrorLaunchOutOfResources || err == cudaErrorInvalidConfiguration)
+    {
+        cudaGetLastError();
+        aosBlock = 128;
+        aosGrid = static_cast<int>((count + static_cast<std::size_t>(aosBlock) - 1) / static_cast<std::size_t>(aosBlock));
+        AoSToSoAAsync<<<aosGrid, aosBlock>>>(
+            devStates,
+            d.position,
+            d.rotation,
+            d.velocity,
+            d.angularVelocity,
+            d.acceleration,
+            d.angularAcceleration,
+            count);
+        err = cudaGetLastError();
+    }
     if (err != cudaSuccess) return 12;
 
     int tcGrid = static_cast<int>((count + 15) / 16);
@@ -456,7 +475,7 @@ int RunBatch(
 
     err = cudaFuncSetAttribute(IntegrateKernel, cudaFuncAttributePreferredSharedMemoryCarveout, 100);
     if (err != cudaSuccess) return 17;
-    IntegrateKernel<<<grid, block>>>(
+    IntegrateKernel<<<grid, integrateBlock>>>(
         d.position,
         d.rotation,
         d.velocity,
@@ -473,7 +492,7 @@ int RunBatch(
     err = cudaGetLastError();
     if (err != cudaSuccess) return 17;
 
-    SoAToAoS<<<grid, block>>>(
+    SoAToAoS<<<grid, integrateBlock>>>(
         d.position,
         d.rotation,
         d.velocity,
