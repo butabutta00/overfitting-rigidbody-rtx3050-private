@@ -519,6 +519,11 @@ int RunBatch(
     err = cudaCreateTextureObject(&angularAccelerationTex, &alphaRes, &texDesc, nullptr);
     if (err != cudaSuccess) return RetError(16, 16, err, "cudaCreateTextureObject-angular");
 
+    err = cudaFuncSetAttribute(RbIntegrateKernel, cudaFuncAttributePreferredSharedMemoryCarveout, 100);
+    if (err != cudaSuccess && g_debugEnabled != 0)
+    {
+        SetDebugState(17, err, "IntegrateKernel-PreferredSharedMemoryCarveout-ignored");
+    }
     RbIntegrateKernel<<<grid, integrateBlock>>>(
         d.position,
         d.rotation,
