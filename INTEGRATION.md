@@ -2,8 +2,8 @@
 
 ## 1) What was implemented
 
-- CUDA native plugin in `src/rigidbody_cuda.cu` with RTX 3050-targeted build settings:
-  - `CMAKE_CUDA_ARCHITECTURES=86` (Ampere GA10x path for RTX 3050)
+- CUDA native plugin in `src/rigidbody_cuda.cu` with multi-architecture build settings:
+  - `CMAKE_CUDA_ARCHITECTURES=61;75;86` (Pascal/Turing/Ampere coverage, includes RTX 3050)
   - `-O3 --use_fast_math -Xptxas=-v,-dlcm=ca,-warn-spills,-warn-lmem-usage -lineinfo`
   - `__launch_bounds__(256, 2)` for main kernels
   - SoA (`float4` arrays) integration kernel for coalesced memory access
@@ -51,6 +51,17 @@
    - Windows: `unity/Assets/Plugins/x86_64/rigidbody_cuda.dll`
 3. In Unity Import Settings, enable the target platform/CPU architecture for the plugin.
 
+### Supported GPU architectures
+
+| Compute Capability (SM) | Architecture | Example GPUs |
+| --- | --- | --- |
+| 61 | Pascal | GTX 1050, GTX 1650, GTX 950/960 |
+| 75 | Turing | RTX 2060, RTX 2070, RTX 2080 |
+| 86 | Ampere | RTX 3050 |
+
+- Default CMake cache value: `RB_CUDA_ARCHITECTURES="61;75;86"`
+- Tensor Core-optimized code paths remain available where hardware supports them, and execution falls back to compatible paths on older GPUs.
+
 ### Unity precision selection at build time
 
 - `RigidBodyDynamicsLab` now dispatches through a compile-time bridge:
@@ -61,6 +72,8 @@
 ```bash
 bash ./scripts/build_unity_plugin.sh fp16
 bash ./scripts/build_unity_plugin.sh bf16
+# Override architectures if needed (example: RTX 3050 only)
+bash ./scripts/build_unity_plugin.sh fp16 linux off "86"
 ```
 
 - In Unity Player Settings -> Scripting Define Symbols:

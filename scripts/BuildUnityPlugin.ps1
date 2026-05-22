@@ -7,7 +7,7 @@ param(
 
     [switch]$Diagnostics,
 
-    [string]$CudaArch = "86-real;86-virtual",
+    [string]$CudaArch = "61;75;86",
 
     [string]$Generator = "",
 
