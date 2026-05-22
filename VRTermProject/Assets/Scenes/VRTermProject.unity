@@ -141,7 +141,7 @@ GameObject:
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 0
+  m_IsActive: 1
 --- !u!4 &24255571
 Transform:
   m_ObjectHideFlags: 0
@@ -170,8 +170,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: ead4f4d886ddf4bbcbdb4dfc48b3ad6d, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  integration: 0
-  timeStep: 0.01
+  timeStep: 0.001
   springStiffness: 500
   particleMass: 0.1
   springDamping: 10
@@ -267,7 +266,7 @@ GameObject:
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 0
+  m_IsActive: 1
 --- !u!4 &45575512
 Transform:
   m_ObjectHideFlags: 0
@@ -955,7 +954,7 @@ GameObject:
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 0
+  m_IsActive: 1
 --- !u!4 &949359871
 Transform:
   m_ObjectHideFlags: 0
@@ -1116,7 +1115,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   integration: 1
-  timeStep: 0.001
+  timeStep: 0.1
   springStiffness: 500
   particleMass: 0.1
   springDamping: 10
@@ -1599,7 +1598,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 06a35bc37a1324894b7e5cd578825d87, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  timeStep: 0.01
+  timeStep: 0.08
   springStiffness: 200
   mass: 1
   springDamping: 1
@@ -1822,8 +1821,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: ead4f4d886ddf4bbcbdb4dfc48b3ad6d, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  integration: 0
-  timeStep: 0.01
+  timeStep: 0.001
   springStiffness: 500
   particleMass: 0.1
   springDamping: 10
