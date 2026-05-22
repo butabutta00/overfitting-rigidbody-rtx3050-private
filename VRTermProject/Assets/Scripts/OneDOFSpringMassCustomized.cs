@@ -102,23 +102,16 @@ public class OneDOFSpringMassCustomized : MonoBehaviour
             return;
         }
 
-        /**
-         * _p0 = positionX;  // $P_0$
-         * _p1 = _p0 + _v0 * dt + 0.5 * a0 * dt^2;  // $P_1$
-         * _v0 = velocityX;  // $V_0$
-         * _v1 = _v0 + a0 * dt;  // $V_1$
-         * _a0 = (-K * _p0 - D * _v0) / m;  // $a_0$
-         * _a1 = (-K * _p1 - D * _v0) / m;  // $a_1$
-         */
+        // Closed-form implicit Euler for m*x'' + c*x' + k*x = 0
+        float dt = timeStep;
+        float denom = mass + springDamping * dt + springStiffness * dt * dt;
+        if (denom < 1e-6f) denom = 1e-6f;
 
-        float _a0 = (-springStiffness * positionX - springDamping * velocityX) / mass;
-        float _p1 = positionX + velocityX * timeStep + 0.5f * _a0 * timeStep * timeStep;
-        float _v1 = velocityX + _a0 * timeStep;
-        float _a1 = (-springStiffness * _p1 - springDamping * _v1) / mass;
-        _v1 = velocityX + 0.5f * (_a0 + _a1) * timeStep;
+        float newVelocity = (mass * velocityX - springStiffness * dt * positionX) / denom;
+        float newPosition = positionX + dt * newVelocity;
 
-        positionX = _p1;
-        velocityX = _v1;
+        velocityX = newVelocity;
+        positionX = newPosition;
     }
 
     private void HandleMouseInput()

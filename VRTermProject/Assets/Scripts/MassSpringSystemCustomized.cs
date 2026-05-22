@@ -26,8 +26,9 @@ public class MassSpringSystemCustomized : MonoBehaviour
     private class Particle
     {
         public Vector3 position;
+        public Vector3 previousPosition;
+        public Vector3 predictedPosition;
         public Vector3 velocity;
-        public Vector3 force;
         public float mass;
         public bool isFixed;
     }
@@ -46,6 +47,11 @@ public class MassSpringSystemCustomized : MonoBehaviour
     private Mesh workingMesh;
     private Vector3[] visualVertices;
     private int[] meshTriangles;
+    private float[] springLambdas;
+
+    [Header("XPBD Solver Parameters")]
+    [SerializeField, Range(1, 20)] private int solverIterations = 8;
+    [SerializeField] private float velocityDampingLambda = 5.0125f;
 
     private void Start()
     {
@@ -73,8 +79,9 @@ public class MassSpringSystemCustomized : MonoBehaviour
                 Particle p = new Particle
                 {
                     position = worldPos,
+                    previousPosition = worldPos,
+                    predictedPosition = worldPos,
                     velocity = Vector3.zero,
-                    force = Vector3.zero,
                     mass = particleMass,
                     isFixed = (fixVolume != null && fixVolume.bounds.Contains(worldPos))
                 };
@@ -94,6 +101,8 @@ public class MassSpringSystemCustomized : MonoBehaviour
             AddSpring(meshToParticleMap[meshTriangles[i + 1]], meshToParticleMap[meshTriangles[i + 2]], edgeSet);
             AddSpring(meshToParticleMap[meshTriangles[i + 2]], meshToParticleMap[meshTriangles[i]], edgeSet);
         }
+
+        springLambdas = new float[springs.Count];
     }
 
     private void AddSpring(int a, int b, HashSet<long> edgeSet)
@@ -144,50 +153,87 @@ public class MassSpringSystemCustomized : MonoBehaviour
         // 실행 횟수 카운트
         fixedUpdateCount++;
 
-        // 1. 힘 초기화 (중력)
-        foreach (var p in particles)
-        {
-            if (p.isFixed) continue;
-            p.force = gravity * p.mass;
-        }
+        // XPBD 기반 스텝: 큰 timeStep에서도 발산 억제
+        StepXPBD(timeStep);
 
-        // 2. 내부 스프링 연산
-        foreach (var s in springs)
-        {
-            Particle pA = particles[s.indexA];
-            Particle pB = particles[s.indexB];
-
-            Vector3 diff = pB.position - pA.position;
-            float dist = diff.magnitude;
-            if (dist < 0.0001f) continue;
-            Vector3 dir = diff / dist;
-
-            float fSpring = springStiffness * (dist - s.restLength);
-            float fDamper = springDamping * Vector3.Dot(pB.velocity - pA.velocity, dir);
-
-            Vector3 totalF = dir * (fSpring + fDamper);
-            if (!pA.isFixed) pA.force += totalF;
-            if (!pB.isFixed) pB.force -= totalF;
-        }
-
-        // 3. 수치 적분 (Numerical Integration)
-        Integrate();
-
-        // 4. 시각적 메쉬 갱신
+        // 시각적 메쉬 갱신
         UpdateVisualMesh();
     }
 
-    private void Integrate()
+    private void StepXPBD(float dt)
     {
-        foreach (var p in particles)
+        if (particles.Count == 0 || springs.Count == 0) return;
+
+        // 1) 외력 반영 + 예측 위치 계산
+        for (int i = 0; i < particles.Count; i++)
         {
+            Particle p = particles[i];
+            p.previousPosition = p.position;
+
+            if (p.isFixed)
+            {
+                p.predictedPosition = p.position;
+                p.velocity = Vector3.zero;
+                continue;
+            }
+
+            p.velocity += gravity * dt;
+            p.predictedPosition = p.position + p.velocity * dt;
+        }
+
+        // 각 타임스텝 시작 시 람다 초기화
+        System.Array.Clear(springLambdas, 0, springLambdas.Length);
+
+        // 2) 제약 반복 투영
+        float compliance = 1.0f / Mathf.Max(springStiffness, 1e-6f);
+        float alphaTilde = compliance / (dt * dt);
+
+        for (int iter = 0; iter < solverIterations; iter++)
+        {
+            for (int s = 0; s < springs.Count; s++)
+            {
+                Spring spring = springs[s];
+                Particle pA = particles[spring.indexA];
+                Particle pB = particles[spring.indexB];
+
+                Vector3 diff = pB.predictedPosition - pA.predictedPosition;
+                float dist = diff.magnitude;
+                if (dist < 1e-6f) continue;
+
+                Vector3 n = diff / dist;
+                float C = dist - spring.restLength;
+
+                float wA = pA.isFixed ? 0f : 1f / pA.mass;
+                float wB = pB.isFixed ? 0f : 1f / pB.mass;
+                float w = wA + wB;
+                if (w <= 0f) continue;
+
+                float deltaLambda = (C - alphaTilde * springLambdas[s]) / (w + alphaTilde);
+                springLambdas[s] += deltaLambda;
+
+                if (!pA.isFixed)
+                {
+                    pA.predictedPosition += wA * deltaLambda * n;
+                }
+
+                if (!pB.isFixed)
+                {
+                    pB.predictedPosition -= wB * deltaLambda * n;
+                }
+            }
+        }
+
+        // 3) 속도/위치 확정 + 시간 기반 감쇠
+        float gamma = Mathf.Exp(-velocityDampingLambda * dt);
+
+        for (int i = 0; i < particles.Count; i++)
+        {
+            Particle p = particles[i];
             if (p.isFixed) continue;
-            Vector3 accel = p.force / p.mass;
 
-            p.velocity += accel * timeStep;
-            p.position += p.velocity * timeStep;
-
-            p.velocity *= 0.995f;
+            p.velocity = (p.predictedPosition - p.previousPosition) / dt;
+            p.velocity *= gamma;
+            p.position = p.predictedPosition;
         }
     }
 

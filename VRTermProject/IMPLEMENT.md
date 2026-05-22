@@ -1461,3 +1461,1495 @@ e^{-5.0125\Delta t}\mathbf{v}
 $$
 
 를 사용하면 됩니다.
+
+
+---
+
+가능합니다. **“큰 $\Delta t$에서도 발산하지 않게”** 하려면 XPBD나 implicit 계열이 좋지만, 그중에서도 성능을 더 아끼려면 **전역 implicit 선형계 풀이**나 많은 iteration을 쓰는 XPBD보다, 현재 MassSpring 구조에 가까운 **pairwise implicit / compliant spring projection / quasi-implicit damping** 계열이 적합합니다.
+
+아래는 **수식 결과는 유사하게 유지하면서 성능을 개선하는 방안**입니다.
+
+---
+
+# 1. 핵심 추천
+
+성능과 안정성의 균형을 보면 다음 순서를 추천합니다.
+
+$$
+\boxed{
+\text{1순위: Pairwise Implicit Spring-Damper 1-pass}
+}
+$$
+
+$$
+\boxed{
+\text{2순위: XPBD를 1\sim 3 iteration으로 제한}
+}
+$$
+
+$$
+\boxed{
+\text{3순위: 현재 Semi-Implicit Euler + 안정화된 implicit damping}
+}
+$$
+
+가장 추천하는 것은 **Pairwise Implicit Spring-Damper 1-pass**입니다.
+
+이 방식은 각 스프링마다 닫힌 형태의 1D implicit update만 수행하므로, 전체 행렬을 풀 필요가 없습니다.
+
+즉,
+
+$$
+O(N_{\text{spring}})
+$$
+
+복잡도를 유지하면서, 현재 명시적 spring force보다 훨씬 안정적입니다.
+
+---
+
+# 2. 기존 명시적 힘 계산의 비용
+
+현재 MassSpring은 스프링마다 대략 다음을 계산합니다.
+
+$$
+\mathbf{d}_{ij}
+=
+\mathbf{x}_j-\mathbf{x}_i
+$$
+
+$$
+\ell
+=
+\|\mathbf{d}_{ij}\|
+$$
+
+$$
+\hat{\mathbf{n}}
+=
+\frac{\mathbf{d}_{ij}}{\ell}
+$$
+
+$$
+f_s
+=
+k(\ell-\ell_0)
+$$
+
+$$
+f_d
+=
+c
+\left(
+(\mathbf{v}_j-\mathbf{v}_i)\cdot\hat{\mathbf{n}}
+\right)
+$$
+
+$$
+\mathbf{F}_{ij}
+=
+\hat{\mathbf{n}}
+(f_s+f_d)
+$$
+
+$$
+\mathbf{F}_i \mathrel{+}= \mathbf{F}_{ij}
+$$
+
+$$
+\mathbf{F}_j \mathrel{-}= \mathbf{F}_{ij}
+$$
+
+이후 각 질점에 대해
+
+$$
+\mathbf{v}_i^{n+1}
+=
+\mathbf{v}_i^n
++
+\frac{\mathbf{F}_i^n}{m_i}\Delta t
+$$
+
+$$
+\mathbf{x}_i^{n+1}
+=
+\mathbf{x}_i^n+\mathbf{v}_i^{n+1}\Delta t
+$$
+
+입니다.
+
+이 방식은 빠르지만, 큰 $\Delta t$에서 안정성이 약합니다.
+
+---
+
+# 3. 개선안 A — Force Accumulation 제거형 Pairwise Implicit
+
+기존에는 모든 spring force를 누적한 뒤 한 번에 속도를 업데이트했습니다.
+
+개선안은 힘을 저장하지 않고, 각 spring마다 바로 velocity correction을 적용합니다.
+
+## 3.1 수식
+
+스프링 쌍 $(i,j)$에 대해
+
+$$
+\mathbf{d}_{ij}
+=
+\mathbf{x}_j-\mathbf{x}_i
+$$
+
+$$
+\ell_{ij}
+=
+\|\mathbf{d}_{ij}\|
+$$
+
+$$
+\hat{\mathbf{n}}_{ij}
+=
+\frac{\mathbf{d}_{ij}}{\ell_{ij}}
+$$
+
+$$
+C_{ij}
+=
+\ell_{ij}-\ell_{ij}^0
+$$
+
+상대속도 방향 성분은
+
+$$
+v_{rel}
+=
+(\mathbf{v}_j-\mathbf{v}_i)\cdot\hat{\mathbf{n}}_{ij}
+$$
+
+inverse mass는
+
+$$
+w_i=\frac{1}{m_i},\qquad w_j=\frac{1}{m_j}
+$$
+
+$$
+w=w_i+w_j
+$$
+
+$$
+m_{\text{eff}}
+=
+\frac{1}{w}
+$$
+
+입니다.
+
+스프링 방향 운동을 1D implicit Euler로 보면,
+
+$$
+m_{\text{eff}}\dot{v}
++
+cv
++
+kC
+=
+0
+$$
+
+입니다.
+
+Implicit update는 다음처럼 둘 수 있습니다.
+
+$$
+v_{rel}^{n+1}
+=
+\frac{
+m_{\text{eff}}v_{rel}^{n}
+-
+k\Delta t C_{ij}^{n}
+}{
+m_{\text{eff}}+c\Delta t+k\Delta t^2
+}
+$$
+
+상대속도 보정량은
+
+$$
+\Delta v_{rel}
+=
+v_{rel}^{n+1}-v_{rel}^{n}
+$$
+
+Impulse scalar는
+
+$$
+J
+=
+m_{\text{eff}}\Delta v_{rel}
+$$
+
+따라서,
+
+$$
+\mathbf{J}
+=
+J\hat{\mathbf{n}}_{ij}
+$$
+
+속도 보정은
+
+$$
+\boxed{
+\mathbf{v}_i
+\leftarrow
+\mathbf{v}_i
+-
+w_i\mathbf{J}
+}
+$$
+
+$$
+\boxed{
+\mathbf{v}_j
+\leftarrow
+\mathbf{v}_j
++
+w_j\mathbf{J}
+}
+$$
+
+마지막에 위치를 업데이트합니다.
+
+$$
+\boxed{
+\mathbf{x}_i^{n+1}
+=
+\mathbf{x}_i^n+\Delta t\mathbf{v}_i^{n+1}
+}
+$$
+
+---
+
+## 3.2 이 방식의 장점
+
+기존과 비교하면 다음 배열을 줄일 수 있습니다.
+
+$$
+\mathbf{F}_i
+$$
+
+force accumulation buffer를 줄이거나 제거할 수 있습니다.
+
+또한 각 스프링마다 곧바로 velocity correction을 하기 때문에,
+
+$$
+\Delta t
+$$
+
+가 조금 커져도 명시적 Euler보다 안정적입니다.
+
+연산 복잡도는 여전히
+
+$$
+O(N_s)
+$$
+
+입니다.
+
+---
+
+# 4. 개선안 B — $m_{\text{eff}}$, restLength, stiffness 계수 사전 계산
+
+매 프레임마다 반복 계산되는 값은 사전 계산할 수 있습니다.
+
+스프링 $(i,j)$마다 질량이 고정되어 있다면,
+
+$$
+w_i,\quad w_j,\quad w_i+w_j,\quad m_{\text{eff}}
+$$
+
+는 변하지 않습니다.
+
+따라서 미리 저장합니다.
+
+$$
+m_{\text{eff},ij}
+=
+\frac{1}{w_i+w_j}
+$$
+
+그리고 매 step에서 분모는
+
+$$
+D_{ij}
+=
+m_{\text{eff},ij}+c_{ij}\Delta t+k_{ij}\Delta t^2
+$$
+
+입니다.
+
+$\Delta t$가 고정 step이면 이것도 사전 계산 가능합니다.
+
+$$
+\boxed{
+D_{ij}^{-1}
+=
+\frac{1}{
+m_{\text{eff},ij}+c_{ij}\Delta t+k_{ij}\Delta t^2
+}
+}
+$$
+
+그럼 매 스프링에서 나눗셈을 제거하고 곱셈으로 바꿀 수 있습니다.
+
+$$
+v_{rel}^{n+1}
+=
+\left(
+m_{\text{eff}}v_{rel}^{n}
+-
+k\Delta t C
+\right)
+D^{-1}
+$$
+
+또는 impulse를 직접 계산하면 더 간단합니다.
+
+$$
+J
+=
+m_{\text{eff}}
+\left(
+v_{rel}^{n+1}-v_{rel}^{n}
+\right)
+$$
+
+이를 전개하면,
+
+$$
+J
+=
+m_{\text{eff}}
+\left[
+\frac{
+m_{\text{eff}}v_{rel}
+-
+k\Delta t C
+}{
+D
+}
+-
+v_{rel}
+\right]
+$$
+
+$$
+J
+=
+m_{\text{eff}}
+\frac{
+m_{\text{eff}}v_{rel}
+-
+k\Delta t C
+-
+Dv_{rel}
+}{
+D}
+$$
+
+$$
+D
+=
+m_{\text{eff}}+c\Delta t+k\Delta t^2
+$$
+
+이므로,
+
+$$
+m_{\text{eff}}v_{rel}
+-
+Dv_{rel}
+=
+-
+(c\Delta t+k\Delta t^2)v_{rel}
+$$
+
+따라서,
+
+$$
+\boxed{
+J
+=
+-
+m_{\text{eff}}
+\frac{
+k\Delta t C
++
+(c\Delta t+k\Delta t^2)v_{rel}
+}{
+m_{\text{eff}}+c\Delta t+k\Delta t^2
+}
+}
+$$
+
+즉,
+
+$$
+\boxed{
+J
+=
+-
+\beta C
+-
+\gamma v_{rel}
+}
+$$
+
+형태로 쓸 수 있습니다.
+
+여기서
+
+$$
+\boxed{
+\beta
+=
+\frac{
+m_{\text{eff}}k\Delta t
+}{
+m_{\text{eff}}+c\Delta t+k\Delta t^2
+}
+}
+$$
+
+$$
+\boxed{
+\gamma
+=
+\frac{
+m_{\text{eff}}(c\Delta t+k\Delta t^2)
+}{
+m_{\text{eff}}+c\Delta t+k\Delta t^2
+}
+}
+$$
+
+따라서 매 스프링에서 필요한 계산은 다음으로 줄어듭니다.
+
+$$
+\boxed{
+J
+=
+-\beta C-\gamma v_{rel}
+}
+$$
+
+$$
+\boxed{
+\mathbf{J}
+=
+J\hat{\mathbf{n}}
+}
+$$
+
+$$
+\boxed{
+\mathbf{v}_i
+\leftarrow
+\mathbf{v}_i-w_i\mathbf{J}
+}
+$$
+
+$$
+\boxed{
+\mathbf{v}_j
+\leftarrow
+\mathbf{v}_j+w_j\mathbf{J}
+}
+$$
+
+---
+
+# 5. 최적화된 Pairwise Implicit 최종 식
+
+스프링마다 미리 저장:
+
+$$
+w_i=\frac{1}{m_i}
+$$
+
+$$
+w_j=\frac{1}{m_j}
+$$
+
+$$
+m_{\text{eff}}=\frac{1}{w_i+w_j}
+$$
+
+고정된 $\Delta t$에 대해 미리 저장:
+
+$$
+\boxed{
+\beta
+=
+\frac{
+m_{\text{eff}}k\Delta t
+}{
+m_{\text{eff}}+c\Delta t+k\Delta t^2
+}
+}
+$$
+
+$$
+\boxed{
+\gamma
+=
+\frac{
+m_{\text{eff}}(c\Delta t+k\Delta t^2)
+}{
+m_{\text{eff}}+c\Delta t+k\Delta t^2
+}
+}
+$$
+
+매 step, 매 spring에서 계산:
+
+$$
+\mathbf{d}_{ij}
+=
+\mathbf{x}_j-\mathbf{x}_i
+$$
+
+$$
+\ell_{ij}
+=
+\|\mathbf{d}_{ij}\|
+$$
+
+$$
+\hat{\mathbf{n}}_{ij}
+=
+\frac{\mathbf{d}_{ij}}{\ell_{ij}}
+$$
+
+$$
+C_{ij}
+=
+\ell_{ij}-\ell_{ij}^{0}
+$$
+
+$$
+v_{rel}
+=
+(\mathbf{v}_j-\mathbf{v}_i)
+\cdot
+\hat{\mathbf{n}}_{ij}
+$$
+
+$$
+\boxed{
+J
+=
+-\beta C_{ij}
+-
+\gamma v_{rel}
+}
+$$
+
+$$
+\boxed{
+\mathbf{J}
+=
+J\hat{\mathbf{n}}_{ij}
+}
+$$
+
+$$
+\boxed{
+\mathbf{v}_i
+\leftarrow
+\mathbf{v}_i-w_i\mathbf{J}
+}
+$$
+
+$$
+\boxed{
+\mathbf{v}_j
+\leftarrow
+\mathbf{v}_j+w_j\mathbf{J}
+}
+$$
+
+이 형태가 가장 실용적입니다.
+
+---
+
+# 6. 코드 구조
+
+```csharp
+void StepOptimizedPairwiseImplicit(float dt)
+{
+    // 1. gravity
+    for (int i = 0; i < particles.Count; i++)
+    {
+        if (particles[i].isFixed)
+            continue;
+
+        particles[i].velocity += gravity * dt;
+    }
+
+    // 2. spring pair velocity correction
+    for (int s = 0; s < springs.Count; s++)
+    {
+        int i = springs[s].i;
+        int j = springs[s].j;
+
+        Particle pi = particles[i];
+        Particle pj = particles[j];
+
+        Vector3 d = pj.position - pi.position;
+        float len = d.magnitude;
+
+        if (len < 1e-6f)
+            continue;
+
+        Vector3 n = d / len;
+
+        float C = len - springs[s].restLength;
+
+        Vector3 vRelVec = pj.velocity - pi.velocity;
+        float vRel = Vector3.Dot(vRelVec, n);
+
+        float wi = pi.invMass;
+        float wj = pj.invMass;
+
+        float J = -springs[s].beta * C - springs[s].gamma * vRel;
+
+        Vector3 impulse = J * n;
+
+        if (wi > 0.0f)
+            pi.velocity -= wi * impulse;
+
+        if (wj > 0.0f)
+            pj.velocity += wj * impulse;
+
+        particles[i] = pi;
+        particles[j] = pj;
+    }
+
+    // 3. integrate position
+    for (int i = 0; i < particles.Count; i++)
+    {
+        if (particles[i].isFixed)
+            continue;
+
+        particles[i].position += particles[i].velocity * dt;
+    }
+
+    // 4. optional time-consistent global damping
+    float gammaGlobal = Mathf.Exp(-globalDampingLambda * dt);
+
+    for (int i = 0; i < particles.Count; i++)
+    {
+        if (particles[i].isFixed)
+            continue;
+
+        particles[i].velocity *= gammaGlobal;
+    }
+}
+```
+
+---
+
+# 7. $\beta, \gamma$ 사전 계산 코드
+
+고정 timestep 또는 timestep이 변경될 때만 계산하면 됩니다.
+
+```csharp
+void PrecomputeSpringCoefficients(float dt)
+{
+    for (int s = 0; s < springs.Count; s++)
+    {
+        int i = springs[s].i;
+        int j = springs[s].j;
+
+        float wi = particles[i].invMass;
+        float wj = particles[j].invMass;
+        float w = wi + wj;
+
+        if (w <= 0.0f)
+        {
+            springs[s].beta = 0.0f;
+            springs[s].gamma = 0.0f;
+            continue;
+        }
+
+        float meff = 1.0f / w;
+
+        float k = springs[s].stiffness;
+        float c = springs[s].damping;
+
+        float denom = meff + c * dt + k * dt * dt;
+
+        springs[s].beta = meff * k * dt / denom;
+        springs[s].gamma = meff * (c * dt + k * dt * dt) / denom;
+    }
+}
+```
+
+---
+
+# 8. 성능 측면에서 더 줄일 수 있는 부분
+
+## 8.1 force 배열 제거
+
+기존:
+
+$$
+\mathbf{F}_i
+$$
+
+를 매 프레임 초기화하고 누적해야 합니다.
+
+$$
+O(N_p)
+$$
+
+초기화 비용과 메모리 write가 발생합니다.
+
+개선 방식은 force accumulation 없이 velocity를 바로 보정하므로 메모리 접근이 줄어듭니다.
+
+---
+
+## 8.2 질량 나눗셈 제거
+
+기존에는 매번
+
+$$
+\frac{\mathbf{F}}{m}
+$$
+
+또는
+
+$$
+\frac{1}{m}
+$$
+
+계산을 할 수 있습니다.
+
+대신
+
+$$
+w_i=\frac{1}{m_i}
+$$
+
+를 미리 저장합니다.
+
+$$
+\boxed{
+\mathbf{a}_i=w_i\mathbf{F}_i
+}
+$$
+
+또는 impulse 보정에서
+
+$$
+\boxed{
+\Delta\mathbf{v}_i=w_i\mathbf{J}
+}
+$$
+
+로 사용합니다.
+
+---
+
+## 8.3 sqrt 최소화는 어렵지만 대체 가능
+
+스프링 방향
+
+$$
+\hat{\mathbf{n}}=
+\frac{\mathbf{d}}{\|\mathbf{d}\|}
+$$
+
+계산에는 sqrt가 필요합니다.
+
+거리 constraint나 spring force는 실제 길이
+
+$$
+\ell
+$$
+
+이 필요하므로 완전히 제거하기는 어렵습니다.
+
+다만 고성능화에서는 다음 방법을 쓸 수 있습니다.
+
+### 방법 1: fast inverse sqrt 사용
+
+$$
+\hat{\mathbf{n}}
+=
+\mathbf{d}\cdot \frac{1}{\sqrt{\mathbf{d}\cdot\mathbf{d}}}
+$$
+
+Unity C#에서는 `Mathf.Sqrt`가 병목이면 Burst/Jobs로 넘기는 게 더 효과적입니다.
+
+---
+
+### 방법 2: small deformation 근사
+
+변형이 작다면 현재 길이 대신 rest length 기준 방향을 쓰는 근사도 가능합니다.
+
+$$
+\hat{\mathbf{n}}_{ij}
+\approx
+\hat{\mathbf{n}}_{ij}^0
+$$
+
+$$
+C_{ij}
+\approx
+(\mathbf{x}_j-\mathbf{x}_i)\cdot\hat{\mathbf{n}}_{ij}^0-\ell_{ij}^0
+$$
+
+이 경우 sqrt가 사라집니다.
+
+매 spring 계산은 다음이 됩니다.
+
+$$
+C_{ij}
+=
+(\mathbf{x}_j-\mathbf{x}_i)\cdot\hat{\mathbf{n}}_{ij}^0-\ell_{ij}^0
+$$
+
+$$
+v_{rel}
+=
+(\mathbf{v}_j-\mathbf{v}_i)\cdot\hat{\mathbf{n}}_{ij}^0
+$$
+
+$$
+J
+=
+-\beta C_{ij}
+-
+\gamma v_{rel}
+$$
+
+$$
+\mathbf{J}
+=
+J\hat{\mathbf{n}}_{ij}^0
+$$
+
+이 방식은 매우 빠릅니다.
+
+단점은 큰 변형이나 회전에서는 실제 스프링 방향을 제대로 따라가지 못합니다.
+
+즉, 작은 진동계, 구조물 주변 변형, 거의 선형적인 spring system에는 좋지만, 천/로프처럼 큰 변형에는 부적합할 수 있습니다.
+
+---
+
+# 9. Small Deformation 근사 최종식
+
+초기 상태에서 미리 계산:
+
+$$
+\mathbf{d}_{ij}^0
+=
+\mathbf{x}_j^0-\mathbf{x}_i^0
+$$
+
+$$
+\ell_{ij}^0
+=
+\|\mathbf{d}_{ij}^0\|
+$$
+
+$$
+\hat{\mathbf{n}}_{ij}^0
+=
+\frac{\mathbf{d}_{ij}^0}{\ell_{ij}^0}
+$$
+
+매 step:
+
+$$
+\boxed{
+C_{ij}
+=
+(\mathbf{x}_j-\mathbf{x}_i)\cdot\hat{\mathbf{n}}_{ij}^0
+-
+\ell_{ij}^0
+}
+$$
+
+$$
+\boxed{
+v_{rel}
+=
+(\mathbf{v}_j-\mathbf{v}_i)
+\cdot
+\hat{\mathbf{n}}_{ij}^0
+}
+$$
+
+$$
+\boxed{
+J
+=
+-\beta C_{ij}
+-
+\gamma v_{rel}
+}
+$$
+
+$$
+\boxed{
+\mathbf{J}
+=
+J\hat{\mathbf{n}}_{ij}^0
+}
+$$
+
+$$
+\boxed{
+\mathbf{v}_i
+\leftarrow
+\mathbf{v}_i-w_i\mathbf{J}
+}
+$$
+
+$$
+\boxed{
+\mathbf{v}_j
+\leftarrow
+\mathbf{v}_j+w_j\mathbf{J}
+}
+$$
+
+이 방식은 sqrt가 없고 dot product 중심이라 매우 빠릅니다.
+
+---
+
+# 10. Small Deformation 코드
+
+```csharp
+void StepLinearizedPairwiseImplicit(float dt)
+{
+    for (int i = 0; i < particles.Count; i++)
+    {
+        if (particles[i].isFixed)
+            continue;
+
+        particles[i].velocity += gravity * dt;
+    }
+
+    for (int s = 0; s < springs.Count; s++)
+    {
+        int i = springs[s].i;
+        int j = springs[s].j;
+
+        Particle pi = particles[i];
+        Particle pj = particles[j];
+
+        Vector3 n0 = springs[s].restDirection;
+
+        Vector3 d = pj.position - pi.position;
+        Vector3 v = pj.velocity - pi.velocity;
+
+        float C = Vector3.Dot(d, n0) - springs[s].restLength;
+        float vRel = Vector3.Dot(v, n0);
+
+        float J = -springs[s].beta * C - springs[s].gamma * vRel;
+
+        Vector3 impulse = J * n0;
+
+        float wi = pi.invMass;
+        float wj = pj.invMass;
+
+        if (wi > 0.0f)
+            pi.velocity -= wi * impulse;
+
+        if (wj > 0.0f)
+            pj.velocity += wj * impulse;
+
+        particles[i] = pi;
+        particles[j] = pj;
+    }
+
+    float gammaGlobal = Mathf.Exp(-globalDampingLambda * dt);
+
+    for (int i = 0; i < particles.Count; i++)
+    {
+        if (particles[i].isFixed)
+            continue;
+
+        particles[i].velocity *= gammaGlobal;
+        particles[i].position += particles[i].velocity * dt;
+    }
+}
+```
+
+---
+
+# 11. XPBD의 iteration을 줄이는 방법
+
+XPBD를 쓰되 성능을 아끼려면 iteration 수를 줄이고 stiffness를 보정하면 됩니다.
+
+XPBD의 constraint update는
+
+$$
+\Delta \lambda
+=
+\frac{
+C-\tilde{\alpha}\lambda
+}{
+w_i+w_j+\tilde{\alpha}
+}
+$$
+
+$$
+\tilde{\alpha}
+=
+\frac{1}{k\Delta t^2}
+$$
+
+입니다.
+
+iteration 수가 적으면 constraint가 덜 만족됩니다.
+
+이때 $k$를 키우기보다 compliance를 줄입니다.
+
+$$
+\alpha = \frac{1}{k}
+$$
+
+$$
+\alpha_{\text{eff}}
+=
+\frac{\alpha}{N_{\text{iter}}}
+$$
+
+또는 경험적으로,
+
+$$
+k_{\text{eff}}
+=
+N_{\text{iter}}k
+$$
+
+처럼 쓸 수 있습니다.
+
+하지만 너무 키우면 jitter가 생깁니다.
+
+추천은 다음입니다.
+
+$$
+N_{\text{iter}}=2\sim4
+$$
+
+$$
+\alpha_{\text{eff}}
+=
+\frac{1}{k N_{\text{iter}}}
+$$
+
+그러면 1-pass pairwise implicit보다 조금 더 안정적이고, full XPBD보다 빠릅니다.
+
+---
+
+# 12. OneDOF 성능 개선
+
+OneDOF는 이미 매우 가볍습니다. 그래도 매 step마다 나눗셈을 하지 않으려면 다음을 미리 계산합니다.
+
+Implicit Euler 식:
+
+$$
+v_{n+1}
+=
+\frac{
+mv_n-k\Delta t x_n
+}{
+m+c\Delta t+k\Delta t^2
+}
+$$
+
+이를
+
+$$
+v_{n+1}
+=
+A v_n
+-
+B x_n
+$$
+
+로 씁니다.
+
+$$
+\boxed{
+A
+=
+\frac{m}{
+m+c\Delta t+k\Delta t^2
+}
+}
+$$
+
+$$
+\boxed{
+B
+=
+\frac{k\Delta t}{
+m+c\Delta t+k\Delta t^2
+}
+}
+$$
+
+따라서,
+
+$$
+\boxed{
+v_{n+1}
+=
+A v_n-Bx_n
+}
+$$
+
+$$
+\boxed{
+x_{n+1}
+=
+x_n+\Delta t v_{n+1}
+}
+$$
+
+외력이 있으면,
+
+$$
+v_{n+1}
+=
+\frac{
+mv_n+\Delta t F_{\text{ext}}-k\Delta t x_n
+}{
+m+c\Delta t+k\Delta t^2
+}
+$$
+
+따라서,
+
+$$
+\boxed{
+v_{n+1}
+=
+A v_n
+-
+B x_n
++
+G F_{\text{ext}}
+}
+$$
+
+$$
+\boxed{
+G
+=
+\frac{\Delta t}{
+m+c\Delta t+k\Delta t^2
+}
+}
+$$
+
+---
+
+# 13. OneDOF 최적 코드
+
+```csharp
+void PrecomputeOneDOF(float dt)
+{
+    float denom = mass + damping * dt + stiffness * dt * dt;
+
+    coeffA = mass / denom;
+    coeffB = stiffness * dt / denom;
+    coeffG = dt / denom;
+}
+
+void StepOneDOFImplicitFast(float dt)
+{
+    float externalForce = 0.0f;
+
+    float newVelocity =
+        coeffA * velocity
+        - coeffB * displacement
+        + coeffG * externalForce;
+
+    displacement += dt * newVelocity;
+    velocity = newVelocity;
+}
+```
+
+---
+
+# 14. 성능별 추천 조합
+
+## 정확도와 안정성 균형
+
+$$
+\boxed{
+\text{MassSpring: Optimized Pairwise Implicit}
+}
+$$
+
+$$
+\boxed{
+\text{OneDOF: Precomputed Implicit Euler}
+}
+$$
+
+특징:
+
+$$
+O(N_s+N_p)
+$$
+
+$$
+\text{발산 억제 강함}
+$$
+
+$$
+\text{기존 코드 구조와 유사}
+$$
+
+---
+
+## 가장 빠른 방식
+
+$$
+\boxed{
+\text{MassSpring: Linearized Pairwise Implicit}
+}
+$$
+
+$$
+\boxed{
+\text{OneDOF: Precomputed Implicit Euler}
+}
+$$
+
+이 경우 스프링마다 sqrt가 제거됩니다.
+
+대신 큰 회전이나 큰 변형에서는 정확도가 떨어집니다.
+
+---
+
+## 가장 안정적인 방식
+
+$$
+\boxed{
+\text{MassSpring: XPBD, } 3\sim5 \text{ iterations}
+}
+$$
+
+$$
+\boxed{
+\text{OneDOF: Implicit Euler}
+}
+$$
+
+성능은 조금 더 들지만, 큰 $\Delta t$에서 가장 덜 터집니다.
+
+---
+
+# 15. 최종 추천안
+
+현재 요구가
+
+> 수식 측면에서 비슷한 결과를 가져오면서 조금 더 성능을 개선
+
+이라면 최종적으로 아래 방식을 추천합니다.
+
+---
+
+## MassSpring
+
+기존 스프링 힘
+
+$$
+f_s=k(\ell-\ell_0)
+$$
+
+$$
+f_d=c
+\left(
+(\mathbf{v}_j-\mathbf{v}_i)\cdot\hat{\mathbf{n}}
+\right)
+$$
+
+를 직접 힘으로 누적하지 말고, 아래 impulse 식으로 대체합니다.
+
+$$
+\boxed{
+J
+=
+-\beta C
+-
+\gamma v_{rel}
+}
+$$
+
+$$
+\boxed{
+C=\ell-\ell_0
+}
+$$
+
+$$
+\boxed{
+v_{rel}=
+(\mathbf{v}_j-\mathbf{v}_i)\cdot\hat{\mathbf{n}}
+}
+$$
+
+$$
+\boxed{
+\beta
+=
+\frac{
+m_{\text{eff}}k\Delta t
+}{
+m_{\text{eff}}+c\Delta t+k\Delta t^2
+}
+}
+$$
+
+$$
+\boxed{
+\gamma
+=
+\frac{
+m_{\text{eff}}(c\Delta t+k\Delta t^2)
+}{
+m_{\text{eff}}+c\Delta t+k\Delta t^2
+}
+}
+$$
+
+$$
+\boxed{
+\mathbf{J}=J\hat{\mathbf{n}}
+}
+$$
+
+$$
+\boxed{
+\mathbf{v}_i
+\leftarrow
+\mathbf{v}_i-w_i\mathbf{J}
+}
+$$
+
+$$
+\boxed{
+\mathbf{v}_j
+\leftarrow
+\mathbf{v}_j+w_j\mathbf{J}
+}
+$$
+
+그 후,
+
+$$
+\boxed{
+\mathbf{x}_i
+\leftarrow
+\mathbf{x}_i+\Delta t\mathbf{v}_i
+}
+$$
+
+---
+
+## OneDOF
+
+기존 velocity Verlet 대신 precomputed implicit Euler를 사용합니다.
+
+$$
+\boxed{
+v_{n+1}
+=
+A v_n-Bx_n
+}
+$$
+
+$$
+\boxed{
+x_{n+1}
+=
+x_n+\Delta t v_{n+1}
+}
+$$
+
+$$
+\boxed{
+A
+=
+\frac{m}{
+m+c\Delta t+k\Delta t^2
+}
+}
+$$
+
+$$
+\boxed{
+B
+=
+\frac{k\Delta t}{
+m+c\Delta t+k\Delta t^2
+}
+}
+$$
+
+외력이 있으면,
+
+$$
+\boxed{
+v_{n+1}
+=
+A v_n-Bx_n+GF_{\text{ext}}
+}
+$$
+
+$$
+\boxed{
+G=
+\frac{\Delta t}{
+m+c\Delta t+k\Delta t^2
+}
+}
+$$
+
+---
+
+이 조합은 기존 결과와 물리적 형태가 비슷하면서도,
+
+$$
+\boxed{
+\text{force accumulation 제거}
+}
+$$
+
+$$
+\boxed{
+\text{나눗셈 사전 계산}
+}
+$$
+
+$$
+\boxed{
+\text{implicit 안정성 확보}
+}
+$$
+
+$$
+\boxed{
+O(N_s+N_p) \text{ 유지}
+}
+$$
+
+라는 장점이 있습니다.

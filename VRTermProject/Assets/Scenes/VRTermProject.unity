@@ -141,7 +141,7 @@ GameObject:
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 1
+  m_IsActive: 0
 --- !u!4 &24255571
 Transform:
   m_ObjectHideFlags: 0
@@ -170,12 +170,14 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: ead4f4d886ddf4bbcbdb4dfc48b3ad6d, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  timeStep: 0.001
+  timeStep: 0.1
   springStiffness: 500
   particleMass: 0.1
   springDamping: 10
   gravity: {x: 0, y: -9.81, z: 0}
   fixVolume: {fileID: 1398824169}
+  solverIterations: 8
+  velocityDampingLambda: 5.0125
 --- !u!64 &24255573
 MeshCollider:
   m_ObjectHideFlags: 0
@@ -266,7 +268,7 @@ GameObject:
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 1
+  m_IsActive: 0
 --- !u!4 &45575512
 Transform:
   m_ObjectHideFlags: 0
@@ -1778,7 +1780,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 5676118154437224752, guid: eed7f818b0693334bbac48550b02f27f, type: 3}
       propertyPath: m_IsActive
-      value: 0
+      value: 1
       objectReference: {fileID: 0}
     - target: {fileID: 8446097875293055314, guid: eed7f818b0693334bbac48550b02f27f, type: 3}
       propertyPath: m_Name
@@ -1821,12 +1823,14 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: ead4f4d886ddf4bbcbdb4dfc48b3ad6d, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  timeStep: 0.001
+  timeStep: 0.1
   springStiffness: 500
   particleMass: 0.1
   springDamping: 10
   gravity: {x: 0, y: -9.81, z: 0}
   fixVolume: {fileID: 148587645}
+  solverIterations: 8
+  velocityDampingLambda: 5.0125
 --- !u!1660057539 &9223372036854775807
 SceneRoots:
   m_ObjectHideFlags: 0
