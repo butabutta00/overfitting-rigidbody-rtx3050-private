@@ -26,8 +26,6 @@ public class MassSpringSystemCustomized : MonoBehaviour
     private class Particle
     {
         public Vector3 position;
-        public Vector3 previousPosition;
-        public Vector3 predictedPosition;
         public Vector3 velocity;
         public float mass;
         public bool isFixed;
@@ -38,6 +36,10 @@ public class MassSpringSystemCustomized : MonoBehaviour
         public int indexA;
         public int indexB;
         public float restLength;
+        public float invMassA;
+        public float invMassB;
+        public float beta;
+        public float gamma;
     }
 
     private List<Particle> particles = new List<Particle>();
@@ -47,10 +49,11 @@ public class MassSpringSystemCustomized : MonoBehaviour
     private Mesh workingMesh;
     private Vector3[] visualVertices;
     private int[] meshTriangles;
-    private float[] springLambdas;
+    private float cachedCoeffTimeStep = -1f;
+    private float cachedCoeffStiffness = -1f;
+    private float cachedCoeffDamping = -1f;
 
-    [Header("XPBD Solver Parameters")]
-    [SerializeField, Range(1, 20)] private int solverIterations = 8;
+    [Header("Implicit Pair Solver Parameters")]
     [SerializeField] private float velocityDampingLambda = 5.0125f;
 
     private void Start()
@@ -79,8 +82,6 @@ public class MassSpringSystemCustomized : MonoBehaviour
                 Particle p = new Particle
                 {
                     position = worldPos,
-                    previousPosition = worldPos,
-                    predictedPosition = worldPos,
                     velocity = Vector3.zero,
                     mass = particleMass,
                     isFixed = (fixVolume != null && fixVolume.bounds.Contains(worldPos))
@@ -102,7 +103,7 @@ public class MassSpringSystemCustomized : MonoBehaviour
             AddSpring(meshToParticleMap[meshTriangles[i + 2]], meshToParticleMap[meshTriangles[i]], edgeSet);
         }
 
-        springLambdas = new float[springs.Count];
+        UpdateSpringCoefficientsIfNeeded();
     }
 
     private void AddSpring(int a, int b, HashSet<long> edgeSet)
@@ -137,6 +138,7 @@ public class MassSpringSystemCustomized : MonoBehaviour
     {
         // 사용자가 설정한 timeStep에 맞춰 유니티의 실제 물리 루프 속도를 강제로 동기화
         Time.fixedDeltaTime = timeStep;
+        UpdateSpringCoefficientsIfNeeded();
 
         // 실제 초당 물리 업데이트 횟수(Hz) 측정
         hzTimer += Time.deltaTime;
@@ -153,87 +155,120 @@ public class MassSpringSystemCustomized : MonoBehaviour
         // 실행 횟수 카운트
         fixedUpdateCount++;
 
-        // XPBD 기반 스텝: 큰 timeStep에서도 발산 억제
-        StepXPBD(timeStep);
+        // Optimized pairwise implicit spring-damper step
+        StepOptimizedPairwiseImplicit(timeStep);
 
         // 시각적 메쉬 갱신
         UpdateVisualMesh();
     }
 
-    private void StepXPBD(float dt)
+    private void UpdateSpringCoefficientsIfNeeded()
+    {
+        if (Mathf.Approximately(cachedCoeffTimeStep, timeStep)
+            && Mathf.Approximately(cachedCoeffStiffness, springStiffness)
+            && Mathf.Approximately(cachedCoeffDamping, springDamping))
+        {
+            return;
+        }
+
+        float dt = timeStep;
+        float k = springStiffness;
+        float c = springDamping;
+
+        for (int s = 0; s < springs.Count; s++)
+        {
+            Spring spring = springs[s];
+            Particle pA = particles[spring.indexA];
+            Particle pB = particles[spring.indexB];
+
+            spring.invMassA = pA.isFixed ? 0f : 1f / pA.mass;
+            spring.invMassB = pB.isFixed ? 0f : 1f / pB.mass;
+
+            float w = spring.invMassA + spring.invMassB;
+            if (w <= 0f)
+            {
+                spring.beta = 0f;
+                spring.gamma = 0f;
+                continue;
+            }
+
+            float meff = 1f / w;
+            float denom = meff + c * dt + k * dt * dt;
+            if (denom < 1e-6f) denom = 1e-6f;
+
+            spring.beta = (meff * k * dt) / denom;
+            spring.gamma = (meff * (c * dt + k * dt * dt)) / denom;
+        }
+
+        cachedCoeffTimeStep = timeStep;
+        cachedCoeffStiffness = springStiffness;
+        cachedCoeffDamping = springDamping;
+    }
+
+    private void StepOptimizedPairwiseImplicit(float dt)
     {
         if (particles.Count == 0 || springs.Count == 0) return;
 
-        // 1) 외력 반영 + 예측 위치 계산
+        // 1) 외력 적용
         for (int i = 0; i < particles.Count; i++)
         {
             Particle p = particles[i];
-            p.previousPosition = p.position;
-
             if (p.isFixed)
             {
-                p.predictedPosition = p.position;
                 p.velocity = Vector3.zero;
                 continue;
             }
 
             p.velocity += gravity * dt;
-            p.predictedPosition = p.position + p.velocity * dt;
         }
 
-        // 각 타임스텝 시작 시 람다 초기화
-        System.Array.Clear(springLambdas, 0, springLambdas.Length);
-
-        // 2) 제약 반복 투영
-        float compliance = 1.0f / Mathf.Max(springStiffness, 1e-6f);
-        float alphaTilde = compliance / (dt * dt);
-
-        for (int iter = 0; iter < solverIterations; iter++)
+        // 2) 스프링 쌍 velocity correction
+        for (int s = 0; s < springs.Count; s++)
         {
-            for (int s = 0; s < springs.Count; s++)
+            Spring spring = springs[s];
+            Particle pA = particles[spring.indexA];
+            Particle pB = particles[spring.indexB];
+
+            Vector3 diff = pB.position - pA.position;
+            float dist = diff.magnitude;
+            if (dist < 1e-6f) continue;
+
+            Vector3 n = diff / dist;
+            float C = dist - spring.restLength;
+            float vRel = Vector3.Dot(pB.velocity - pA.velocity, n);
+
+            float impulseScalar = -spring.beta * C - spring.gamma * vRel;
+            Vector3 impulse = impulseScalar * n;
+
+            if (spring.invMassA > 0f)
             {
-                Spring spring = springs[s];
-                Particle pA = particles[spring.indexA];
-                Particle pB = particles[spring.indexB];
+                pA.velocity -= spring.invMassA * impulse;
+            }
 
-                Vector3 diff = pB.predictedPosition - pA.predictedPosition;
-                float dist = diff.magnitude;
-                if (dist < 1e-6f) continue;
-
-                Vector3 n = diff / dist;
-                float C = dist - spring.restLength;
-
-                float wA = pA.isFixed ? 0f : 1f / pA.mass;
-                float wB = pB.isFixed ? 0f : 1f / pB.mass;
-                float w = wA + wB;
-                if (w <= 0f) continue;
-
-                float deltaLambda = (C - alphaTilde * springLambdas[s]) / (w + alphaTilde);
-                springLambdas[s] += deltaLambda;
-
-                if (!pA.isFixed)
-                {
-                    pA.predictedPosition += wA * deltaLambda * n;
-                }
-
-                if (!pB.isFixed)
-                {
-                    pB.predictedPosition -= wB * deltaLambda * n;
-                }
+            if (spring.invMassB > 0f)
+            {
+                pB.velocity += spring.invMassB * impulse;
             }
         }
 
-        // 3) 속도/위치 확정 + 시간 기반 감쇠
-        float gamma = Mathf.Exp(-velocityDampingLambda * dt);
+        // 3) 위치 업데이트
+        for (int i = 0; i < particles.Count; i++)
+        {
+            Particle p = particles[i];
+            if (p.isFixed) continue;
+
+            p.position += p.velocity * dt;
+        }
+
+        // 4) 시간 기반 전역 감쇠
+        float gammaGlobal = Mathf.Exp(-velocityDampingLambda * dt);
 
         for (int i = 0; i < particles.Count; i++)
         {
             Particle p = particles[i];
             if (p.isFixed) continue;
 
-            p.velocity = (p.predictedPosition - p.previousPosition) / dt;
-            p.velocity *= gamma;
-            p.position = p.predictedPosition;
+            p.velocity *= gammaGlobal;
         }
     }
 

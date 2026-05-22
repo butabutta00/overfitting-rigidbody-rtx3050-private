@@ -33,6 +33,14 @@ public class OneDOFSpringMassCustomized : MonoBehaviour
     private float hzTimer = 0f;
     private float actualPhysicsHz = 0f;
 
+    // Implicit Euler 계수 캐시: v_{n+1} = A*v_n - B*x_n
+    private float coeffA;
+    private float coeffB;
+    private float cachedTimeStep = -1f;
+    private float cachedStiffness = -1f;
+    private float cachedDamping = -1f;
+    private float cachedMass = -1f;
+
     private void Start()
     {
         mainCam = Camera.main;
@@ -41,6 +49,7 @@ public class OneDOFSpringMassCustomized : MonoBehaviour
         velocityX = 0f;
 
         SetupLineRenderer();
+        UpdateImplicitCoefficientsIfNeeded();
     }
 
     private void SetupLineRenderer()
@@ -67,6 +76,7 @@ public class OneDOFSpringMassCustomized : MonoBehaviour
     {
         // 사용자가 설정한 timeStep에 맞춰 유니티의 실제 물리 루프 속도를 강제로 동기화
         Time.fixedDeltaTime = timeStep;
+        UpdateImplicitCoefficientsIfNeeded();
 
         // 마우스 입력 감지
         HandleMouseInput();
@@ -103,15 +113,33 @@ public class OneDOFSpringMassCustomized : MonoBehaviour
         }
 
         // Closed-form implicit Euler for m*x'' + c*x' + k*x = 0
+        float newVelocity = coeffA * velocityX - coeffB * positionX;
+        float newPosition = positionX + timeStep * newVelocity;
+
+        velocityX = newVelocity;
+        positionX = newPosition;
+    }
+
+    private void UpdateImplicitCoefficientsIfNeeded()
+    {
+        if (Mathf.Approximately(cachedTimeStep, timeStep)
+            && Mathf.Approximately(cachedStiffness, springStiffness)
+            && Mathf.Approximately(cachedDamping, springDamping)
+            && Mathf.Approximately(cachedMass, mass))
+        {
+            return;
+        }
+
         float dt = timeStep;
         float denom = mass + springDamping * dt + springStiffness * dt * dt;
         if (denom < 1e-6f) denom = 1e-6f;
 
-        float newVelocity = (mass * velocityX - springStiffness * dt * positionX) / denom;
-        float newPosition = positionX + dt * newVelocity;
-
-        velocityX = newVelocity;
-        positionX = newPosition;
+        coeffA = mass / denom;
+        coeffB = (springStiffness * dt) / denom;
+        cachedTimeStep = timeStep;
+        cachedStiffness = springStiffness;
+        cachedDamping = springDamping;
+        cachedMass = mass;
     }
 
     private void HandleMouseInput()
