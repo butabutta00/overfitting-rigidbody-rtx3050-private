@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using UnityEngine;
 
@@ -16,6 +17,12 @@ public class MassSpringSystemCustomized : MonoBehaviour
     [SerializeField] private float springDamping = 10f;
     [SerializeField] private Vector3 gravity = new Vector3(0, -9.81f, 0);
     [SerializeField] private Collider fixVolume;
+
+    [Header("Physical Simulations")]
+    [SerializeField] private float physicsSimulationSlicingCoeff = 3f;
+    [SerializeField] private float physicsSimulationSubDeltaTime = 0.001f;
+    [SerializeField] private int framesSkippingRender = 0;
+    [SerializeField] private int nextRenderFrameSkip = 0;
 
     // [실시간 Hz 측정용 변수]
     private int fixedUpdateCount = 0;
@@ -126,8 +133,13 @@ public class MassSpringSystemCustomized : MonoBehaviour
 
     private void Update()
     {
+        physicsSimulationSlicingCoeff = 3f * (Mathf.Log10(timeStep) + 3f) + 1f;
+        physicsSimulationSubDeltaTime = timeStep / physicsSimulationSlicingCoeff;
+        framesSkippingRender = Math.Max(0, Mathf.RoundToInt(physicsSimulationSlicingCoeff) - 1);
+
+
         // 사용자가 설정한 timeStep에 맞춰 유니티의 실제 물리 루프 속도를 강제로 동기화
-        Time.fixedDeltaTime = timeStep;
+        Time.fixedDeltaTime = physicsSimulationSubDeltaTime;
 
         // 실제 초당 물리 업데이트 횟수(Hz) 측정
         hzTimer += Time.deltaTime;
@@ -173,8 +185,13 @@ public class MassSpringSystemCustomized : MonoBehaviour
         // 3. 수치 적분 (Numerical Integration)
         Integrate();
 
-        // 4. 시각적 메쉬 갱신
-        UpdateVisualMesh();
+        if (nextRenderFrameSkip <= 0) {
+            // 4. 시각적 메쉬 갱신
+            UpdateVisualMesh();
+            nextRenderFrameSkip = framesSkippingRender;
+        } else {
+            nextRenderFrameSkip--;
+        }
     }
 
     private void Integrate()
@@ -184,9 +201,9 @@ public class MassSpringSystemCustomized : MonoBehaviour
             if (p.isFixed) continue;
             Vector3 accel = p.force / p.mass;
 
-            // Velocity Verlet integration
-            p.position += p.velocity * timeStep + 0.5f * accel * timeStep * timeStep;
+        
             p.velocity += accel * timeStep;
+            p.position += p.velocity * timeStep;
 
             p.velocity *= 0.995f;
         }
