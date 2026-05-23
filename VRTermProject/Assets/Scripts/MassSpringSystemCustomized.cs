@@ -27,6 +27,7 @@ public class MassSpringSystemCustomized : MonoBehaviour
     {
         public Vector3 position;
         public Vector3 velocity;
+        public Vector3 force;
         public float mass;
         public bool isFixed;
     }
@@ -36,10 +37,6 @@ public class MassSpringSystemCustomized : MonoBehaviour
         public int indexA;
         public int indexB;
         public float restLength;
-        public float invMassA;
-        public float invMassB;
-        public float beta;
-        public float gamma;
     }
 
     private List<Particle> particles = new List<Particle>();
@@ -49,12 +46,6 @@ public class MassSpringSystemCustomized : MonoBehaviour
     private Mesh workingMesh;
     private Vector3[] visualVertices;
     private int[] meshTriangles;
-    private float cachedCoeffTimeStep = -1f;
-    private float cachedCoeffStiffness = -1f;
-    private float cachedCoeffDamping = -1f;
-
-    [Header("Implicit Pair Solver Parameters")]
-    [SerializeField] private float velocityDampingLambda = 5.0125f;
 
     private void Start()
     {
@@ -83,6 +74,7 @@ public class MassSpringSystemCustomized : MonoBehaviour
                 {
                     position = worldPos,
                     velocity = Vector3.zero,
+                    force = Vector3.zero,
                     mass = particleMass,
                     isFixed = (fixVolume != null && fixVolume.bounds.Contains(worldPos))
                 };
@@ -102,8 +94,6 @@ public class MassSpringSystemCustomized : MonoBehaviour
             AddSpring(meshToParticleMap[meshTriangles[i + 1]], meshToParticleMap[meshTriangles[i + 2]], edgeSet);
             AddSpring(meshToParticleMap[meshTriangles[i + 2]], meshToParticleMap[meshTriangles[i]], edgeSet);
         }
-
-        UpdateSpringCoefficientsIfNeeded();
     }
 
     private void AddSpring(int a, int b, HashSet<long> edgeSet)
@@ -138,7 +128,6 @@ public class MassSpringSystemCustomized : MonoBehaviour
     {
         // 사용자가 설정한 timeStep에 맞춰 유니티의 실제 물리 루프 속도를 강제로 동기화
         Time.fixedDeltaTime = timeStep;
-        UpdateSpringCoefficientsIfNeeded();
 
         // 실제 초당 물리 업데이트 횟수(Hz) 측정
         hzTimer += Time.deltaTime;
@@ -155,120 +144,51 @@ public class MassSpringSystemCustomized : MonoBehaviour
         // 실행 횟수 카운트
         fixedUpdateCount++;
 
-        // Optimized pairwise implicit spring-damper step
-        StepOptimizedPairwiseImplicit(timeStep);
-
-        // 시각적 메쉬 갱신
-        UpdateVisualMesh();
-    }
-
-    private void UpdateSpringCoefficientsIfNeeded()
-    {
-        if (Mathf.Approximately(cachedCoeffTimeStep, timeStep)
-            && Mathf.Approximately(cachedCoeffStiffness, springStiffness)
-            && Mathf.Approximately(cachedCoeffDamping, springDamping))
+        // 1. 힘 초기화 (중력)
+        foreach (var p in particles)
         {
-            return;
+            if (p.isFixed) continue;
+            p.force = gravity * p.mass;
         }
 
-        float dt = timeStep;
-        float k = springStiffness;
-        float c = springDamping;
-
-        for (int s = 0; s < springs.Count; s++)
+        // 2. 내부 스프링 연산
+        foreach (var s in springs)
         {
-            Spring spring = springs[s];
-            Particle pA = particles[spring.indexA];
-            Particle pB = particles[spring.indexB];
-
-            spring.invMassA = pA.isFixed ? 0f : 1f / pA.mass;
-            spring.invMassB = pB.isFixed ? 0f : 1f / pB.mass;
-
-            float w = spring.invMassA + spring.invMassB;
-            if (w <= 0f)
-            {
-                spring.beta = 0f;
-                spring.gamma = 0f;
-                continue;
-            }
-
-            float meff = 1f / w;
-            float denom = meff + c * dt + k * dt * dt;
-            if (denom < 1e-6f) denom = 1e-6f;
-
-            spring.beta = (meff * k * dt) / denom;
-            spring.gamma = (meff * (c * dt + k * dt * dt)) / denom;
-        }
-
-        cachedCoeffTimeStep = timeStep;
-        cachedCoeffStiffness = springStiffness;
-        cachedCoeffDamping = springDamping;
-    }
-
-    private void StepOptimizedPairwiseImplicit(float dt)
-    {
-        if (particles.Count == 0 || springs.Count == 0) return;
-
-        // 1) 외력 적용
-        for (int i = 0; i < particles.Count; i++)
-        {
-            Particle p = particles[i];
-            if (p.isFixed)
-            {
-                p.velocity = Vector3.zero;
-                continue;
-            }
-
-            p.velocity += gravity * dt;
-        }
-
-        // 2) 스프링 쌍 velocity correction
-        for (int s = 0; s < springs.Count; s++)
-        {
-            Spring spring = springs[s];
-            Particle pA = particles[spring.indexA];
-            Particle pB = particles[spring.indexB];
+            Particle pA = particles[s.indexA];
+            Particle pB = particles[s.indexB];
 
             Vector3 diff = pB.position - pA.position;
             float dist = diff.magnitude;
-            if (dist < 1e-6f) continue;
+            if (dist < 0.0001f) continue;
+            Vector3 dir = diff / dist;
 
-            Vector3 n = diff / dist;
-            float C = dist - spring.restLength;
-            float vRel = Vector3.Dot(pB.velocity - pA.velocity, n);
+            float fSpring = springStiffness * (dist - s.restLength);
+            float fDamper = springDamping * Vector3.Dot(pB.velocity - pA.velocity, dir);
 
-            float impulseScalar = -spring.beta * C - spring.gamma * vRel;
-            Vector3 impulse = impulseScalar * n;
-
-            if (spring.invMassA > 0f)
-            {
-                pA.velocity -= spring.invMassA * impulse;
-            }
-
-            if (spring.invMassB > 0f)
-            {
-                pB.velocity += spring.invMassB * impulse;
-            }
+            Vector3 totalF = dir * (fSpring + fDamper);
+            if (!pA.isFixed) pA.force += totalF;
+            if (!pB.isFixed) pB.force -= totalF;
         }
 
-        // 3) 위치 업데이트
-        for (int i = 0; i < particles.Count; i++)
+        // 3. 수치 적분 (Numerical Integration)
+        Integrate();
+
+        // 4. 시각적 메쉬 갱신
+        UpdateVisualMesh();
+    }
+
+    private void Integrate()
+    {
+        foreach (var p in particles)
         {
-            Particle p = particles[i];
             if (p.isFixed) continue;
+            Vector3 accel = p.force / p.mass;
 
-            p.position += p.velocity * dt;
-        }
+            // Velocity Verlet integration
+            p.position += p.velocity * timeStep + 0.5f * accel * timeStep * timeStep;
+            p.velocity += accel * timeStep;
 
-        // 4) 시간 기반 전역 감쇠
-        float gammaGlobal = Mathf.Exp(-velocityDampingLambda * dt);
-
-        for (int i = 0; i < particles.Count; i++)
-        {
-            Particle p = particles[i];
-            if (p.isFixed) continue;
-
-            p.velocity *= gammaGlobal;
+            p.velocity *= 0.995f;
         }
     }
 

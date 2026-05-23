@@ -141,7 +141,7 @@ GameObject:
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 1
+  m_IsActive: 0
 --- !u!4 &24255571
 Transform:
   m_ObjectHideFlags: 0
@@ -177,6 +177,12 @@ MonoBehaviour:
   gravity: {x: 0, y: -9.81, z: 0}
   fixVolume: {fileID: 1398824169}
   velocityDampingLambda: 5.0125
+  referenceTimeStep: 0.001
+  stiffnessResponsePower: 0.5
+  maxStiffnessResponseScale: 4
+  maxRelativeCorrection: 0.5
+  dampingCompensationPower: 0.35
+  minGlobalDampingScale: 0.35
 --- !u!64 &24255573
 MeshCollider:
   m_ObjectHideFlags: 0
@@ -267,7 +273,7 @@ GameObject:
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 0
+  m_IsActive: 1
 --- !u!4 &45575512
 Transform:
   m_ObjectHideFlags: 0
@@ -1606,6 +1612,9 @@ MonoBehaviour:
   anchorTransform: {fileID: 0}
   positionX: 0
   velocityX: 0
+  referenceTimeStep: 0.001
+  stiffnessResponsePower: 0.5
+  maxStiffnessResponseScale: 4
 --- !u!135 &1725338326
 SphereCollider:
   m_ObjectHideFlags: 0
@@ -1829,6 +1838,12 @@ MonoBehaviour:
   gravity: {x: 0, y: -9.81, z: 0}
   fixVolume: {fileID: 148587645}
   velocityDampingLambda: 5.0125
+  referenceTimeStep: 0.001
+  stiffnessResponsePower: 0.5
+  maxStiffnessResponseScale: 4
+  maxRelativeCorrection: 0.5
+  dampingCompensationPower: 0.35
+  minGlobalDampingScale: 0.35
 --- !u!1660057539 &9223372036854775807
 SceneRoots:
   m_ObjectHideFlags: 0

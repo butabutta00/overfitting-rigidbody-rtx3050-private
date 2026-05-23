@@ -40,6 +40,14 @@ public class OneDOFSpringMassCustomized : MonoBehaviour
     private float cachedStiffness = -1f;
     private float cachedDamping = -1f;
     private float cachedMass = -1f;
+    private float cachedReferenceTimeStep = -1f;
+    private float cachedStiffnessPower = -1f;
+    private float cachedMaxStiffnessScale = -1f;
+
+    [Header("Timestep Compensation")]
+    [SerializeField] private float referenceTimeStep = 0.001f;
+    [SerializeField] private float stiffnessResponsePower = 0.5f;
+    [SerializeField] private float maxStiffnessResponseScale = 4.0f;
 
     private void Start()
     {
@@ -125,21 +133,42 @@ public class OneDOFSpringMassCustomized : MonoBehaviour
         if (Mathf.Approximately(cachedTimeStep, timeStep)
             && Mathf.Approximately(cachedStiffness, springStiffness)
             && Mathf.Approximately(cachedDamping, springDamping)
-            && Mathf.Approximately(cachedMass, mass))
+            && Mathf.Approximately(cachedMass, mass)
+            && Mathf.Approximately(cachedReferenceTimeStep, referenceTimeStep)
+            && Mathf.Approximately(cachedStiffnessPower, stiffnessResponsePower)
+            && Mathf.Approximately(cachedMaxStiffnessScale, maxStiffnessResponseScale))
         {
             return;
         }
 
-        float dt = timeStep;
-        float denom = mass + springDamping * dt + springStiffness * dt * dt;
+        float dt = Mathf.Max(timeStep, 1e-6f);
+        float referenceDt = Mathf.Max(referenceTimeStep, 1e-6f);
+        float dtRatio = dt / referenceDt;
+        float stiffnessScale = Mathf.Pow(dtRatio, stiffnessResponsePower);
+        stiffnessScale = Mathf.Clamp(stiffnessScale, 1f, Mathf.Max(1f, maxStiffnessResponseScale));
+
+        float betaBaseDenom = mass + springStiffness * dt * dt;
+        if (betaBaseDenom < 1e-6f) betaBaseDenom = 1e-6f;
+
+        float gammaDenom = mass + springDamping * dt;
+        if (gammaDenom < 1e-6f) gammaDenom = 1e-6f;
+
+        float betaEff = stiffnessScale * ((springStiffness * dt) / betaBaseDenom);
+        float gammaD = (springDamping * dt) / gammaDenom;
+
+        float denom = 1f + gammaD;
         if (denom < 1e-6f) denom = 1e-6f;
 
-        coeffA = mass / denom;
-        coeffB = (springStiffness * dt) / denom;
+        coeffA = 1f / denom;
+        coeffB = betaEff / denom;
+
         cachedTimeStep = timeStep;
         cachedStiffness = springStiffness;
         cachedDamping = springDamping;
         cachedMass = mass;
+        cachedReferenceTimeStep = referenceTimeStep;
+        cachedStiffnessPower = stiffnessResponsePower;
+        cachedMaxStiffnessScale = maxStiffnessResponseScale;
     }
 
     private void HandleMouseInput()
