@@ -14,6 +14,10 @@ add_library(mass_spring_native SHARED
     mass_spring_native.cu
 )
 
+add_executable(main
+    main.cu
+)
+
 target_compile_definitions(mass_spring_native PRIVATE MASS_SPRING_NATIVE_EXPORTS=1)
 
 set(MSS_NVCC_FLAGS
@@ -30,8 +34,24 @@ target_compile_options(mass_spring_native PRIVATE
     $<$<COMPILE_LANGUAGE:CUDA>:${MSS_NVCC_FLAGS}>
 )
 
+target_compile_options(main PRIVATE
+    $<$<COMPILE_LANGUAGE:CUDA>:${MSS_NVCC_FLAGS}>
+)
+
+target_link_libraries(main PRIVATE
+    mass_spring_native
+    CUDA::cudart
+)
+
 set_target_properties(mass_spring_native PROPERTIES
     CUDA_SEPARABLE_COMPILATION OFF
     CUDA_RESOLVE_DEVICE_SYMBOLS OFF
     OUTPUT_NAME "mass_spring_native"
+)
+
+set_target_properties(main PROPERTIES
+    CUDA_SEPARABLE_COMPILATION OFF
+    CUDA_RESOLVE_DEVICE_SYMBOLS OFF
+    OUTPUT_NAME "main"
+    BUILD_RPATH "$ORIGIN"
 )
