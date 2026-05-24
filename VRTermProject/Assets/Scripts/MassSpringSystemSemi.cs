@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using UnityEngine;
 
 [RequireComponent(typeof(MeshFilter))]
-public class MassSpringSystemCustomized : MonoBehaviour
+public class MassSpringSystemSemi : MonoBehaviour
 {
     [Range(0.001f, 0.1f)]
     [Tooltip("타임스텝이 커질수록 시스템이 어떻게 변하는지 관찰하세요.")]
