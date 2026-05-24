@@ -847,8 +847,8 @@ MSS_API int mssStepImplicit(void* system, const MssImplicitParams* stepParams)
     const float h = stepParams->dt;
     const float h2 = h * h;
 
-    CopyStateKernel<<<pBlocks, kBlockSize>>>(sys->dPosition, sys->dVelocity, sys->dX0, sys->dV0, sys->particleCount);
-    if (!CheckCuda(cudaGetLastError(), "CopyStateKernel launch")) return -1;
+    if (!CheckCuda(cudaMemcpy(sys->dX0, sys->dPosition, sizeof(float4) * sys->particleCount, cudaMemcpyDeviceToDevice), "cudaMemcpy dPosition->dX0")) return -1;
+    if (!CheckCuda(cudaMemcpy(sys->dV0, sys->dVelocity, sizeof(float4) * sys->particleCount, cudaMemcpyDeviceToDevice), "cudaMemcpy dVelocity->dV0")) return -1;
 
     InitForcesKernel<<<pBlocks, kBlockSize>>>(
         sys->dForce,
