@@ -7,6 +7,15 @@ $build_dir = Join-Path (Join-Path $project_root "cuda") "build"
 $plugin_dir = Join-Path (Join-Path (Join-Path (Join-Path $project_root "VRTermProject") "Assets") "Plugins") "x86_64"
 $cuda_arch = if ($args.Count -gt 0) { $args[0] } else { "86-real;86-virtual" }
 
+$is_windows_platform = $false
+if (Get-Variable IsWindows -ErrorAction SilentlyContinue) {
+    $is_windows_platform = [bool]$IsWindows
+} elseif ($env:OS -eq 'Windows_NT') {
+    $is_windows_platform = $true
+} elseif ($PSVersionTable.PSVersion.Major -le 5) {
+    $is_windows_platform = $true
+}
+
 cmake --fresh -S $cuda_dir -B $build_dir `
     -DCMAKE_BUILD_TYPE=Release `
     -DMSS_CUDA_ARCHITECTURES="$cuda_arch" `
@@ -31,7 +40,7 @@ $dll_file = Join-Path $build_dir "mass_spring_native.dll"
 
 $copied_file = $null
 
-if ($IsWindows) {
+if ($is_windows_platform) {
     if (Test-Path $dll_file_release) {
         $copied_file = Join-Path $plugin_dir "mass_spring_native.dll"
         Copy-Item -Path $dll_file_release -Destination $copied_file -Force
