@@ -5,7 +5,9 @@
 #include <cstdlib>
 #include <iomanip>
 #include <iostream>
+#include <sstream>
 #include <string>
+#include <vector>
 
 namespace
 {
@@ -67,6 +69,73 @@ int main(int argc, char** argv)
         std::cout << "Using GPU[0]: " << prop.name << " (SM " << prop.major << "." << prop.minor << ")" << '\n';
     }
 
+    // Check for interactive mode flag. When present the program reads
+    // whitespace-separated parameter lines from stdin and emits an Output
+    // line for each. Format per line: position velocity dt mass stiffness damping steps
+    bool interactive = false;
+    for (int i = 1; i < argc; ++i)
+    {
+        if (std::string(argv[i]) == "--interactive")
+        {
+            interactive = true;
+            break;
+        }
+    }
+
+    std::cout << std::fixed << std::setprecision(6);
+
+    if (interactive)
+    {
+        std::string line;
+        std::cout << "Entering interactive mode. Send lines: pos vel dt mass stiffness damping steps\n";
+        while (std::getline(std::cin, line))
+        {
+            if (line.empty())
+            {
+                continue;
+            }
+
+            std::istringstream iss(line);
+            MssOneDState state{};
+            MssOneDParams params{};
+            int steps = 1;
+
+            if (!(iss >> state.position >> state.velocity >> params.dt >> params.mass >> params.stiffness >> params.damping >> steps))
+            {
+                std::cerr << "Failed to parse input line (expected 7 values).\n";
+                continue;
+            }
+
+            if (steps < 1)
+            {
+                steps = 1;
+            }
+
+            std::cout << "Input -> x=" << state.position
+                      << ", v=" << state.velocity
+                      << ", dt=" << params.dt
+                      << ", m=" << params.mass
+                      << ", k=" << params.stiffness
+                      << ", c=" << params.damping
+                      << ", steps=" << steps
+                      << '\n';
+
+            for (int i = 0; i < steps; ++i)
+            {
+                int rc = mssOneDImplicitStep(&state, &params);
+                if (rc != 0)
+                {
+                    std::cerr << "mssOneDImplicitStep failed: " << mssGetLastError() << '\n';
+                    break;
+                }
+            }
+
+            std::cout << "Output -> x=" << state.position << ", v=" << state.velocity << '\n' << std::flush;
+        }
+
+        return 0;
+    }
+
     // Positional inputs with defaults for quick validation run:
     // [1] position [2] velocity [3] dt [4] mass [5] stiffness [6] damping [7] steps
     MssOneDState state{};
@@ -85,7 +154,6 @@ int main(int argc, char** argv)
         steps = 1;
     }
 
-    std::cout << std::fixed << std::setprecision(6);
     std::cout << "Input(dummy/default) -> x=" << state.position
               << ", v=" << state.velocity
               << ", dt=" << params.dt
