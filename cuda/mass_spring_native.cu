@@ -40,7 +40,10 @@ struct DeviceSystem
     float4* dAp = nullptr;
 
     float* dDotPartial = nullptr;
+    float* dDotValue = nullptr;
     int dotPartialCount = 0;
+
+    float hDotValue = 0.0f;
 
     bool cudaAvailable = false;
 
@@ -471,6 +474,35 @@ __global__ void DotPartialKernel(
     }
 }
 
+__global__ void ReducePartialSumKernel(const float* partial, int count, float* out)
+{
+    __shared__ float shared[kBlockSize];
+    int tid = threadIdx.x;
+
+    float local = 0.0f;
+    for (int i = tid; i < count; i += blockDim.x)
+    {
+        local += partial[i];
+    }
+
+    shared[tid] = local;
+    __syncthreads();
+
+    for (int stride = blockDim.x / 2; stride > 0; stride >>= 1)
+    {
+        if (tid < stride)
+        {
+            shared[tid] += shared[tid + stride];
+        }
+        __syncthreads();
+    }
+
+    if (tid == 0)
+    {
+        *out = shared[0];
+    }
+}
+
 __global__ void InitCGKernel(const float4* b, const float4* ap, const uint8_t* fixedMask, float4* r, float4* p, int count)
 {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
@@ -609,6 +641,14 @@ bool EnsureBuffers(DeviceSystem& sys)
         sys.dotPartialCount = blocks;
     }
 
+    if (sys.dDotValue == nullptr)
+    {
+        if (!CheckCuda(cudaMalloc(reinterpret_cast<void**>(&sys.dDotValue), sizeof(float)), "cudaMalloc dot value"))
+        {
+            return false;
+        }
+    }
+
     return true;
 }
 
@@ -626,19 +666,18 @@ float DeviceDot(DeviceSystem& sys, const float4* a, const float4* b)
         return 0.0f;
     }
 
-    std::vector<float> hostPartial(static_cast<std::size_t>(blocks), 0.0f);
-    if (!CheckCuda(cudaMemcpy(hostPartial.data(), sys.dDotPartial, sizeof(float) * blocks, cudaMemcpyDeviceToHost), "cudaMemcpy dot partial"))
+    ReducePartialSumKernel<<<1, kBlockSize>>>(sys.dDotPartial, blocks, sys.dDotValue);
+    if (!CheckCuda(cudaGetLastError(), "ReducePartialSumKernel launch"))
     {
         return 0.0f;
     }
 
-    float sum = 0.0f;
-    for (float v : hostPartial)
+    if (!CheckCuda(cudaMemcpy(&sys.hDotValue, sys.dDotValue, sizeof(float), cudaMemcpyDeviceToHost), "cudaMemcpy dot value"))
     {
-        sum += v;
+        return 0.0f;
     }
 
-    return sum;
+    return sys.hDotValue;
 }
 
 bool MultiplyImplicitMatrix(DeviceSystem& sys, const float4* src, float4* dst)
@@ -695,6 +734,7 @@ void FreeSystem(DeviceSystem* sys)
     cudaFree(sys->dP);
     cudaFree(sys->dAp);
     cudaFree(sys->dDotPartial);
+    cudaFree(sys->dDotValue);
 
     delete sys;
 }
@@ -1002,11 +1042,6 @@ MSS_API int mssStepSemi(void* system, const MssSemiParams* stepParams)
         }
     }
 
-    if (!CheckCuda(cudaDeviceSynchronize(), "cudaDeviceSynchronize mssStepSemi"))
-    {
-        return -1;
-    }
-
     gLastError.clear();
     return 0;
 }
@@ -1094,7 +1129,6 @@ MSS_API int mssStepImplicit(void* system, const MssImplicitParams* stepParams)
             stepParams->velocityDamping,
             sys->particleCount);
         if (!CheckCuda(cudaGetLastError(), "CommitImplicitKernel launch (early)")) return -1;
-        if (!CheckCuda(cudaDeviceSynchronize(), "cudaDeviceSynchronize mssStepImplicit early")) return -1;
         gLastError.clear();
         return 0;
     }
@@ -1137,11 +1171,6 @@ MSS_API int mssStepImplicit(void* system, const MssImplicitParams* stepParams)
         sys->particleCount);
     if (!CheckCuda(cudaGetLastError(), "CommitImplicitKernel launch")) return -1;
 
-    if (!CheckCuda(cudaDeviceSynchronize(), "cudaDeviceSynchronize mssStepImplicit"))
-    {
-        return -1;
-    }
-
     gLastError.clear();
     return 0;
 }
@@ -1149,7 +1178,7 @@ MSS_API int mssStepImplicit(void* system, const MssImplicitParams* stepParams)
 MSS_API int mssDownloadState(void* system, float* outPositionXYZ, float* outVelocityXYZ, int particleCount)
 {
     DeviceSystem* sys = reinterpret_cast<DeviceSystem*>(system);
-    if (sys == nullptr || outPositionXYZ == nullptr || outVelocityXYZ == nullptr || particleCount != sys->particleCount)
+    if (sys == nullptr || outPositionXYZ == nullptr || particleCount != sys->particleCount)
     {
         SetError("mssDownloadState invalid arguments");
         return -1;
@@ -1163,30 +1192,47 @@ MSS_API int mssDownloadState(void* system, float* outPositionXYZ, float* outVelo
             outPositionXYZ[base] = sys->hPosition[i].x;
             outPositionXYZ[base + 1] = sys->hPosition[i].y;
             outPositionXYZ[base + 2] = sys->hPosition[i].z;
-            outVelocityXYZ[base] = sys->hVelocity[i].x;
-            outVelocityXYZ[base + 1] = sys->hVelocity[i].y;
-            outVelocityXYZ[base + 2] = sys->hVelocity[i].z;
+
+            if (outVelocityXYZ != nullptr)
+            {
+                outVelocityXYZ[base] = sys->hVelocity[i].x;
+                outVelocityXYZ[base + 1] = sys->hVelocity[i].y;
+                outVelocityXYZ[base + 2] = sys->hVelocity[i].z;
+            }
         }
 
         gLastError.clear();
         return 0;
     }
 
-    std::vector<float4> hostPos(static_cast<std::size_t>(particleCount));
-    std::vector<float4> hostVel(static_cast<std::size_t>(particleCount));
+    if (sys->hPosition.size() != static_cast<std::size_t>(particleCount))
+    {
+        sys->hPosition.resize(static_cast<std::size_t>(particleCount));
+    }
+    if (outVelocityXYZ != nullptr && sys->hVelocity.size() != static_cast<std::size_t>(particleCount))
+    {
+        sys->hVelocity.resize(static_cast<std::size_t>(particleCount));
+    }
 
-    if (!CheckCuda(cudaMemcpy(hostPos.data(), sys->dPosition, sizeof(float4) * particleCount, cudaMemcpyDeviceToHost), "cudaMemcpy dPosition->host")) return -1;
-    if (!CheckCuda(cudaMemcpy(hostVel.data(), sys->dVelocity, sizeof(float4) * particleCount, cudaMemcpyDeviceToHost), "cudaMemcpy dVelocity->host")) return -1;
+    if (!CheckCuda(cudaMemcpy(sys->hPosition.data(), sys->dPosition, sizeof(float4) * particleCount, cudaMemcpyDeviceToHost), "cudaMemcpy dPosition->host")) return -1;
+    if (outVelocityXYZ != nullptr)
+    {
+        if (!CheckCuda(cudaMemcpy(sys->hVelocity.data(), sys->dVelocity, sizeof(float4) * particleCount, cudaMemcpyDeviceToHost), "cudaMemcpy dVelocity->host")) return -1;
+    }
 
     for (int i = 0; i < particleCount; ++i)
     {
         int base = i * 3;
-        outPositionXYZ[base] = hostPos[i].x;
-        outPositionXYZ[base + 1] = hostPos[i].y;
-        outPositionXYZ[base + 2] = hostPos[i].z;
-        outVelocityXYZ[base] = hostVel[i].x;
-        outVelocityXYZ[base + 1] = hostVel[i].y;
-        outVelocityXYZ[base + 2] = hostVel[i].z;
+        outPositionXYZ[base] = sys->hPosition[i].x;
+        outPositionXYZ[base + 1] = sys->hPosition[i].y;
+        outPositionXYZ[base + 2] = sys->hPosition[i].z;
+
+        if (outVelocityXYZ != nullptr)
+        {
+            outVelocityXYZ[base] = sys->hVelocity[i].x;
+            outVelocityXYZ[base + 1] = sys->hVelocity[i].y;
+            outVelocityXYZ[base + 2] = sys->hVelocity[i].z;
+        }
     }
 
     gLastError.clear();

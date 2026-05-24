@@ -240,6 +240,27 @@ internal static class MassSpringNativeInterop
             return true;
         }
 
+        internal bool DownloadPositions(Vector3[] positions)
+        {
+            if (disposed || nativePtr == IntPtr.Zero)
+            {
+                return false;
+            }
+
+            if (mssDownloadState(nativePtr, positionBuffer, null, positions.Length) != 0)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < positions.Length; i++)
+            {
+                int baseIndex = i * 3;
+                positions[i] = new Vector3(positionBuffer[baseIndex], positionBuffer[baseIndex + 1], positionBuffer[baseIndex + 2]);
+            }
+
+            return true;
+        }
+
         public void Dispose()
         {
             if (disposed)

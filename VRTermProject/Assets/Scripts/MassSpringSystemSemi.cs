@@ -322,7 +322,7 @@ public class MassSpringSystemSemi : MonoBehaviour
                 return false;
             }
 
-            return nativeSystem.DownloadState(nativePositions, nativeVelocities);
+            return nativeSystem.DownloadPositions(nativePositions);
         }
         catch
         {
@@ -336,7 +336,6 @@ public class MassSpringSystemSemi : MonoBehaviour
         {
             Particle particle = particles[i];
             particle.position = nativePositions[i];
-            particle.velocity = nativeVelocities[i];
         }
     }
 
