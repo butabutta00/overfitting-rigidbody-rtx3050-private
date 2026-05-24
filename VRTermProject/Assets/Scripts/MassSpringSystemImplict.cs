@@ -21,6 +21,11 @@ public class MassSpringSystemImplict : MonoBehaviour
     [SerializeField] private Vector3 gravity = new Vector3(0, -9.81f, 0);
     [SerializeField] private Collider fixVolume;
 
+    [Header("Physical Simulations")]
+    [SerializeField] private float physicsSimulationSkippingCoeff = 3f;
+    [SerializeField] private int framesSkippingCompute = 0;
+    [SerializeField] private int nextComputeFrameSkip = 0;
+
     // [실시간 Hz 측정용 변수]
     private int fixedUpdateCount = 0;
     private float hzTimer = 0f;
@@ -58,6 +63,10 @@ public class MassSpringSystemImplict : MonoBehaviour
     private Mesh workingMesh;
     private Vector3[] visualVertices;
     private int[] meshTriangles;
+    private Vector3[] previousSimulatedPositions;
+    private Vector3[] currentSimulatedPositions;
+    private int interpolationStep;
+    private int interpolationStepCount = 1;
 
     private void Start()
     {
@@ -106,6 +115,15 @@ public class MassSpringSystemImplict : MonoBehaviour
             AddSpring(meshToParticleMap[meshTriangles[i + 1]], meshToParticleMap[meshTriangles[i + 2]], edgeSet);
             AddSpring(meshToParticleMap[meshTriangles[i + 2]], meshToParticleMap[meshTriangles[i]], edgeSet);
         }
+
+        previousSimulatedPositions = new Vector3[particles.Count];
+        currentSimulatedPositions = new Vector3[particles.Count];
+        for (int i = 0; i < particles.Count; i++)
+        {
+            Vector3 initialPosition = particles[i].position;
+            previousSimulatedPositions[i] = initialPosition;
+            currentSimulatedPositions[i] = initialPosition;
+        }
     }
 
     private void AddSpring(int a, int b, HashSet<long> edgeSet)
@@ -138,6 +156,9 @@ public class MassSpringSystemImplict : MonoBehaviour
 
     private void Update()
     {
+        var _deltaTimeLogscale = Mathf.Log10(timeStep) + 3f;
+        framesSkippingCompute = (int)(_deltaTimeLogscale + 1f + (8 * (Mathf.Pow(2f, -_deltaTimeLogscale * 2))));
+
         // 사용자가 설정한 timeStep에 맞춰 유니티의 실제 물리 루프 속도를 강제로 동기화
         Time.fixedDeltaTime = timeStep;
 
@@ -156,8 +177,29 @@ public class MassSpringSystemImplict : MonoBehaviour
         // 실행 횟수 카운트
         fixedUpdateCount++;
 
-        // 1. Implicit Euler 적분
-        IntegrateImplicitEuler();
+        if (nextComputeFrameSkip <= 0) {
+            for (int i = 0; i < particles.Count; i++)
+            {
+                previousSimulatedPositions[i] = particles[i].position;
+            }
+
+            // 1. Implicit Euler 적분
+            IntegrateImplicitEuler();
+
+            for (int i = 0; i < particles.Count; i++)
+            {
+                currentSimulatedPositions[i] = particles[i].position;
+            }
+
+            interpolationStep = 1;
+            interpolationStepCount = Mathf.Max(1, framesSkippingCompute + 1);
+            nextComputeFrameSkip = framesSkippingCompute;
+        } else {
+            // 선형보간
+            interpolationStep = Mathf.Min(interpolationStep + 1, interpolationStepCount);
+
+            nextComputeFrameSkip--;
+        }
 
         // 2. 시각적 메쉬 갱신
         UpdateVisualMesh();
@@ -166,7 +208,7 @@ public class MassSpringSystemImplict : MonoBehaviour
     private void IntegrateImplicitEuler()
     {
         int count = particles.Count;
-        float h = timeStep;
+        float h = timeStep * framesSkippingCompute;
         float h2 = h * h;
 
         Vector3[] x0 = new Vector3[count];
@@ -354,9 +396,13 @@ public class MassSpringSystemImplict : MonoBehaviour
 
     private void UpdateVisualMesh()
     {
+        float alpha = Mathf.Clamp01((float)interpolationStep / interpolationStepCount);
+
         for (int i = 0; i < visualVertices.Length; i++)
         {
-            visualVertices[i] = transform.InverseTransformPoint(particles[meshToParticleMap[i]].position);
+            int particleIndex = meshToParticleMap[i];
+            Vector3 interpolatedWorldPos = Vector3.Lerp(previousSimulatedPositions[particleIndex], currentSimulatedPositions[particleIndex], alpha);
+            visualVertices[i] = transform.InverseTransformPoint(interpolatedWorldPos);
         }
         workingMesh.vertices = visualVertices;
         workingMesh.RecalculateNormals();

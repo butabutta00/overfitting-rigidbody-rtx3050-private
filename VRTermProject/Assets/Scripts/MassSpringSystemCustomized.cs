@@ -20,6 +20,7 @@ public class MassSpringSystemCustomized : MonoBehaviour
 
     [Header("Physical Simulations")]
     [SerializeField] private float physicsSimulationSlicingCoeff = 3f;
+    [SerializeField] private float physicsSimulationSliceSize = 0.001f;
     [SerializeField] private float physicsSimulationSubDeltaTime = 0.001f;
     [SerializeField] private int framesSkippingRender = 0;
     [SerializeField] private int nextRenderFrameSkip = 0;
@@ -133,9 +134,9 @@ public class MassSpringSystemCustomized : MonoBehaviour
 
     private void Update()
     {
-        physicsSimulationSlicingCoeff = 3f * (Mathf.Log10(timeStep) + 3f) + 1f;
-        physicsSimulationSubDeltaTime = timeStep / physicsSimulationSlicingCoeff;
-        framesSkippingRender = Math.Max(0, Mathf.RoundToInt(physicsSimulationSlicingCoeff) - 1);
+        physicsSimulationSliceSize = physicsSimulationSlicingCoeff * (Mathf.Log10(timeStep) + 3f) + 1f;
+        physicsSimulationSubDeltaTime = timeStep / physicsSimulationSliceSize;
+        framesSkippingRender = Math.Max(0, Mathf.RoundToInt(physicsSimulationSliceSize) - 1);
 
 
         // 사용자가 설정한 timeStep에 맞춰 유니티의 실제 물리 루프 속도를 강제로 동기화
