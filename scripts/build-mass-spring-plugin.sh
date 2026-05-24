@@ -7,7 +7,10 @@ build_dir="${project_root}/cuda/build"
 plugin_dir="${project_root}/VRTermProject/Assets/Plugins/x86_64"
 cuda_arch="${1:-86-real;86-virtual}"
 
-cmake --fresh -S "${cuda_dir}" -B "${build_dir}" \
+rm -f "${build_dir}/CMakeCache.txt"
+rm -rf "${build_dir}/CMakeFiles"
+
+cmake -S "${cuda_dir}" -B "${build_dir}" \
     -DCMAKE_BUILD_TYPE=Release \
     -DMSS_CUDA_ARCHITECTURES="${cuda_arch}" \
     -DMSS_ENABLE_LINEINFO=ON
