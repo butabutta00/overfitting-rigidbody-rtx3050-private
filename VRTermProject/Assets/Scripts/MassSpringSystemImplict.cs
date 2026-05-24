@@ -4,6 +4,12 @@ using UnityEngine;
 [RequireComponent(typeof(MeshFilter))]
 public class MassSpringSystemImplict : MonoBehaviour
 {
+    private enum ComputeBackend
+    {
+        CSharp = 0,
+        NativeCuda = 1
+    }
+
     [Range(0.001f, 0.1f)]
     [Tooltip("타임스텝이 커질수록 시스템이 어떻게 변하는지 관찰하세요.")]
     public float timeStep = 0.01f;
@@ -25,6 +31,11 @@ public class MassSpringSystemImplict : MonoBehaviour
     [SerializeField] private float physicsSimulationSkippingCoeff = 3f;
     [SerializeField] private int framesSkippingCompute = 0;
     [SerializeField] private int nextComputeFrameSkip = 0;
+
+    [Header("Compute Backend")]
+    [SerializeField] private ComputeBackend computeBackend = ComputeBackend.NativeCuda;
+    [SerializeField] private bool autoFallbackToCSharp = true;
+    [SerializeField] private bool nativeReady = false;
 
     // [실시간 Hz 측정용 변수]
     private int fixedUpdateCount = 0;
@@ -67,6 +78,13 @@ public class MassSpringSystemImplict : MonoBehaviour
     private Vector3[] currentSimulatedPositions;
     private int interpolationStep;
     private int interpolationStepCount = 1;
+    private Vector3[] nativePositions;
+    private Vector3[] nativeVelocities;
+    private float[] nativeMasses;
+    private byte[] nativeFixedMask;
+    private int[] nativeSpringEndpoints;
+    private float[] nativeRestLengths;
+    private MassSpringNativeInterop.SystemHandle nativeSystem;
 
     private void Start()
     {
@@ -124,6 +142,76 @@ public class MassSpringSystemImplict : MonoBehaviour
             previousSimulatedPositions[i] = initialPosition;
             currentSimulatedPositions[i] = initialPosition;
         }
+
+        BuildNativeBuffers();
+        TryInitializeNativeBackend();
+    }
+
+    private void BuildNativeBuffers()
+    {
+        int particleCount = particles.Count;
+        int springCount = springs.Count;
+
+        nativePositions = new Vector3[particleCount];
+        nativeVelocities = new Vector3[particleCount];
+        nativeMasses = new float[particleCount];
+        nativeFixedMask = new byte[particleCount];
+        nativeSpringEndpoints = new int[springCount * 2];
+        nativeRestLengths = new float[springCount];
+
+        for (int i = 0; i < particleCount; i++)
+        {
+            Particle particle = particles[i];
+            nativePositions[i] = particle.position;
+            nativeVelocities[i] = particle.velocity;
+            nativeMasses[i] = particle.mass;
+            nativeFixedMask[i] = (byte)(particle.isFixed ? 1 : 0);
+        }
+
+        for (int i = 0; i < springCount; i++)
+        {
+            Spring spring = springs[i];
+            int baseIndex = i * 2;
+            nativeSpringEndpoints[baseIndex] = spring.indexA;
+            nativeSpringEndpoints[baseIndex + 1] = spring.indexB;
+            nativeRestLengths[i] = spring.restLength;
+        }
+    }
+
+    private void TryInitializeNativeBackend()
+    {
+        if (computeBackend != ComputeBackend.NativeCuda)
+        {
+            nativeReady = false;
+            return;
+        }
+
+        if (nativeSystem != null)
+        {
+            nativeSystem.Dispose();
+            nativeSystem = null;
+        }
+
+        if (!MassSpringNativeInterop.SystemHandle.TryCreate(
+                nativePositions,
+                nativeMasses,
+                nativeFixedMask,
+                nativeSpringEndpoints,
+                nativeRestLengths,
+                out nativeSystem,
+                out string error))
+        {
+            nativeReady = false;
+            if (autoFallbackToCSharp)
+            {
+                computeBackend = ComputeBackend.CSharp;
+            }
+
+            Debug.LogWarning($"MassSpringSystemImplict native initialization failed: {error}");
+            return;
+        }
+
+        nativeReady = true;
     }
 
     private void AddSpring(int a, int b, HashSet<long> edgeSet)
@@ -183,8 +271,32 @@ public class MassSpringSystemImplict : MonoBehaviour
                 previousSimulatedPositions[i] = particles[i].position;
             }
 
-            // 1. Implicit Euler 적분
-            IntegrateImplicitEuler();
+            if (nativeReady && computeBackend == ComputeBackend.NativeCuda)
+            {
+                float effectiveDt = timeStep * Mathf.Max(1, framesSkippingCompute);
+                bool ok = nativeSystem.StepImplicit(
+                    effectiveDt,
+                    springStiffness,
+                    springDamping,
+                    gravity,
+                    0.995f,
+                    implicitIterations,
+                    1e-8f);
+
+                if (ok && nativeSystem.DownloadState(nativePositions, nativeVelocities))
+                {
+                    SyncParticlesFromNative();
+                }
+                else
+                {
+                    FallbackToCSharp("native implicit step/download failed");
+                    IntegrateImplicitEuler();
+                }
+            }
+            else
+            {
+                IntegrateImplicitEuler();
+            }
 
             for (int i = 0; i < particles.Count; i++)
             {
@@ -208,7 +320,7 @@ public class MassSpringSystemImplict : MonoBehaviour
     private void IntegrateImplicitEuler()
     {
         int count = particles.Count;
-        float h = timeStep * framesSkippingCompute;
+        float h = timeStep * Mathf.Max(1, framesSkippingCompute);
         float h2 = h * h;
 
         Vector3[] x0 = new Vector3[count];
@@ -440,5 +552,40 @@ public class MassSpringSystemImplict : MonoBehaviour
         }
 
         GUI.Label(new Rect(20, 85, 270, 20), $"dt x Rate Product: {productValue:F3} (Target: 1.0)", labelStyle);
+    }
+
+    private void SyncParticlesFromNative()
+    {
+        for (int i = 0; i < particles.Count; i++)
+        {
+            Particle particle = particles[i];
+            particle.position = nativePositions[i];
+            particle.velocity = nativeVelocities[i];
+        }
+    }
+
+    private void FallbackToCSharp(string reason)
+    {
+        if (computeBackend == ComputeBackend.CSharp)
+        {
+            return;
+        }
+
+        nativeReady = false;
+        if (autoFallbackToCSharp)
+        {
+            computeBackend = ComputeBackend.CSharp;
+        }
+
+        Debug.LogWarning($"MassSpringSystemImplict switched to C# backend: {reason}. Native error: {MassSpringNativeInterop.GetLastErrorMessage()}");
+    }
+
+    private void OnDestroy()
+    {
+        if (nativeSystem != null)
+        {
+            nativeSystem.Dispose();
+            nativeSystem = null;
+        }
     }
 }

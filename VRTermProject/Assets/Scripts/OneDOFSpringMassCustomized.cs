@@ -48,6 +48,7 @@ public class OneDOFSpringMassCustomized : MonoBehaviour
     [SerializeField] private float referenceTimeStep = 0.001f;
     [SerializeField] private float stiffnessResponsePower = 0.5f;
     [SerializeField] private float maxStiffnessResponseScale = 4.0f;
+    [SerializeField] private bool useNativeImplicitSolver = true;
 
     private void Start()
     {
@@ -120,7 +121,23 @@ public class OneDOFSpringMassCustomized : MonoBehaviour
             return;
         }
 
-        // Closed-form implicit Euler for m*x'' + c*x' + k*x = 0
+        if (useNativeImplicitSolver)
+        {
+            bool ok = MassSpringNativeInterop.TryStepOneDImplicit(ref positionX, ref velocityX, timeStep, mass, springStiffness, springDamping);
+            if (!ok)
+            {
+                useNativeImplicitSolver = false;
+                StepClosedFormImplicit();
+            }
+        }
+        else
+        {
+            StepClosedFormImplicit();
+        }
+    }
+
+    private void StepClosedFormImplicit()
+    {
         float newVelocity = coeffA * velocityX - coeffB * positionX;
         float newPosition = positionX + timeStep * newVelocity;
 
