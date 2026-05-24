@@ -12,6 +12,11 @@ cmake --fresh -S $cuda_dir -B $build_dir `
     -DMSS_CUDA_ARCHITECTURES="$cuda_arch" `
     -DMSS_ENABLE_LINEINFO=ON
 
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "CMake configure failed."
+    exit $LASTEXITCODE
+}
+
 cmake --build $build_dir --config Release -j
 
 if ($LASTEXITCODE -ne 0) {
@@ -24,16 +29,32 @@ $so_file = Join-Path $build_dir "libmass_spring_native.so"
 $dll_file_release = Join-Path (Join-Path $build_dir "Release") "mass_spring_native.dll"
 $dll_file = Join-Path $build_dir "mass_spring_native.dll"
 
-if (Test-Path $so_file) {
-    Copy-Item -Path $so_file -Destination (Join-Path $plugin_dir "libmass_spring_native.so") -Force
-} elseif (Test-Path $dll_file_release) {
-    Copy-Item -Path $dll_file_release -Destination (Join-Path $plugin_dir "mass_spring_native.dll") -Force
-} elseif (Test-Path $dll_file) {
-    Copy-Item -Path $dll_file -Destination (Join-Path $plugin_dir "mass_spring_native.dll") -Force
+$copied_file = $null
+
+if ($IsWindows) {
+    if (Test-Path $dll_file_release) {
+        $copied_file = Join-Path $plugin_dir "mass_spring_native.dll"
+        Copy-Item -Path $dll_file_release -Destination $copied_file -Force
+    } elseif (Test-Path $dll_file) {
+        $copied_file = Join-Path $plugin_dir "mass_spring_native.dll"
+        Copy-Item -Path $dll_file -Destination $copied_file -Force
+    } else {
+        Write-Error "Built Windows plugin binary not found in $build_dir"
+        exit 4
+    }
 } else {
-    Write-Error "Built plugin binary not found in $build_dir"
-    exit 4
+    if (Test-Path $so_file) {
+        $copied_file = Join-Path $plugin_dir "libmass_spring_native.so"
+        Copy-Item -Path $so_file -Destination $copied_file -Force
+    } else {
+        Write-Error "Built Linux plugin binary not found in $build_dir"
+        exit 4
+    }
 }
 
 Write-Output "Mass spring plugin build complete."
-Write-Output "Copied binary to $plugin_dir"
+Write-Output "Copied binary: $copied_file"
+if ($copied_file -and (Test-Path $copied_file)) {
+    $item = Get-Item $copied_file
+    Write-Output "Binary timestamp: $($item.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss'))"
+}

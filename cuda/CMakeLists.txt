@@ -31,7 +31,7 @@ target_compile_options(mass_spring_native PRIVATE
 )
 
 set_target_properties(mass_spring_native PROPERTIES
-    CUDA_SEPARABLE_COMPILATION ON
-    CUDA_RESOLVE_DEVICE_SYMBOLS ON
+    CUDA_SEPARABLE_COMPILATION OFF
+    CUDA_RESOLVE_DEVICE_SYMBOLS OFF
     OUTPUT_NAME "mass_spring_native"
 )

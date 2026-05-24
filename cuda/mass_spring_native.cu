@@ -41,6 +41,16 @@ struct DeviceSystem
 
     float* dDotPartial = nullptr;
     int dotPartialCount = 0;
+
+    bool cudaAvailable = false;
+
+    std::vector<float4> hPosition;
+    std::vector<float4> hVelocity;
+    std::vector<float4> hForce;
+    std::vector<float> hMasses;
+    std::vector<uint8_t> hFixedMask;
+    std::vector<int2> hSpringEnds;
+    std::vector<float> hRestLengths;
 };
 
 thread_local std::string gLastError;
@@ -550,6 +560,11 @@ inline int DivUp(int n, int d)
 
 bool EnsureBuffers(DeviceSystem& sys)
 {
+    if (!sys.cudaAvailable)
+    {
+        return true;
+    }
+
     if (sys.particleCount <= 0 || sys.springCount <= 0)
     {
         SetError("invalid system topology");
@@ -599,6 +614,11 @@ bool EnsureBuffers(DeviceSystem& sys)
 
 float DeviceDot(DeviceSystem& sys, const float4* a, const float4* b)
 {
+    if (!sys.cudaAvailable)
+    {
+        return 0.0f;
+    }
+
     int blocks = std::max(1, DivUp(sys.particleCount, kBlockSize));
     DotPartialKernel<<<blocks, kBlockSize>>>(a, b, sys.dFixedMask, sys.particleCount, sys.dDotPartial);
     if (!CheckCuda(cudaGetLastError(), "DotPartialKernel launch"))
@@ -623,6 +643,11 @@ float DeviceDot(DeviceSystem& sys, const float4* a, const float4* b)
 
 bool MultiplyImplicitMatrix(DeviceSystem& sys, const float4* src, float4* dst)
 {
+    if (!sys.cudaAvailable)
+    {
+        return false;
+    }
+
     int pBlocks = DivUp(sys.particleCount, kBlockSize);
     int sBlocks = DivUp(sys.springCount, kBlockSize);
     InitMassTermKernel<<<pBlocks, kBlockSize>>>(src, dst, sys.dMasses, sys.dFixedMask, sys.particleCount);
@@ -673,6 +698,100 @@ void FreeSystem(DeviceSystem* sys)
 
     delete sys;
 }
+
+inline float Dot3Host(const float4& a, const float4& b)
+{
+    return a.x * b.x + a.y * b.y + a.z * b.z;
+}
+
+inline float4 Add3Host(const float4& a, const float4& b)
+{
+    return make_float4(a.x + b.x, a.y + b.y, a.z + b.z, 0.0f);
+}
+
+inline float4 Sub3Host(const float4& a, const float4& b)
+{
+    return make_float4(a.x - b.x, a.y - b.y, a.z - b.z, 0.0f);
+}
+
+inline float4 Mul3Host(const float4& v, float s)
+{
+    return make_float4(v.x * s, v.y * s, v.z * s, 0.0f);
+}
+
+void ComputeForcesSemiHost(DeviceSystem& sys, float springStiffness, float springDamping, float3 gravity)
+{
+    int n = sys.particleCount;
+    for (int i = 0; i < n; ++i)
+    {
+        if (sys.hFixedMask[i])
+        {
+            sys.hForce[i] = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+        }
+        else
+        {
+            float m = sys.hMasses[i];
+            sys.hForce[i] = make_float4(gravity.x * m, gravity.y * m, gravity.z * m, 0.0f);
+        }
+    }
+
+    for (int s = 0; s < sys.springCount; ++s)
+    {
+        int2 e = sys.hSpringEnds[s];
+        int a = e.x;
+        int b = e.y;
+        float4 pa = sys.hPosition[a];
+        float4 pb = sys.hPosition[b];
+        float4 va = sys.hVelocity[a];
+        float4 vb = sys.hVelocity[b];
+
+        float4 diff = Sub3Host(pb, pa);
+        float dist2 = Dot3Host(diff, diff);
+        if (dist2 < kEpsilon)
+        {
+            continue;
+        }
+
+        float dist = std::sqrt(dist2);
+        float invDist = 1.0f / dist;
+        float4 dir = Mul3Host(diff, invDist);
+        float4 relVel = Sub3Host(vb, va);
+        float relAlong = Dot3Host(relVel, dir);
+
+        float fSpring = springStiffness * (dist - sys.hRestLengths[s]);
+        float fDamper = springDamping * relAlong;
+        float4 total = Mul3Host(dir, fSpring + fDamper);
+
+        if (!sys.hFixedMask[a])
+        {
+            sys.hForce[a] = Add3Host(sys.hForce[a], total);
+        }
+
+        if (!sys.hFixedMask[b])
+        {
+            sys.hForce[b] = Sub3Host(sys.hForce[b], total);
+        }
+    }
+}
+
+void IntegrateSemiHost(DeviceSystem& sys, float dt, float velocityDamping)
+{
+    int n = sys.particleCount;
+    for (int i = 0; i < n; ++i)
+    {
+        if (sys.hFixedMask[i])
+        {
+            sys.hVelocity[i] = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+            continue;
+        }
+
+        float invMass = 1.0f / std::max(sys.hMasses[i], kEpsilon);
+        float4 accel = Mul3Host(sys.hForce[i], invMass);
+        sys.hVelocity[i] = Add3Host(sys.hVelocity[i], Mul3Host(accel, dt));
+        sys.hPosition[i] = Add3Host(sys.hPosition[i], Mul3Host(sys.hVelocity[i], dt));
+        sys.hVelocity[i] = Mul3Host(sys.hVelocity[i], velocityDamping);
+    }
+}
 }
 
 extern "C"
@@ -682,6 +801,9 @@ MSS_API void* mssCreateSystem()
     try
     {
         DeviceSystem* sys = new DeviceSystem();
+        int deviceCount = 0;
+        cudaError_t countErr = cudaGetDeviceCount(&deviceCount);
+        sys->cudaAvailable = (countErr == cudaSuccess && deviceCount > 0);
         gLastError.clear();
         return sys;
     }
@@ -732,19 +854,66 @@ MSS_API int mssUploadTopology(
         hostEnds[s] = make_int2(springEndpoints[base], springEndpoints[base + 1]);
     }
 
-    if (!CheckCuda(cudaMalloc(reinterpret_cast<void**>(&sys->dPosition), sizeof(float4) * particleCount), "cudaMalloc dPosition")) return -1;
-    if (!CheckCuda(cudaMalloc(reinterpret_cast<void**>(&sys->dVelocity), sizeof(float4) * particleCount), "cudaMalloc dVelocity")) return -1;
-    if (!CheckCuda(cudaMalloc(reinterpret_cast<void**>(&sys->dMasses), sizeof(float) * particleCount), "cudaMalloc dMasses")) return -1;
-    if (!CheckCuda(cudaMalloc(reinterpret_cast<void**>(&sys->dFixedMask), sizeof(uint8_t) * particleCount), "cudaMalloc dFixedMask")) return -1;
-    if (!CheckCuda(cudaMalloc(reinterpret_cast<void**>(&sys->dSpringEnds), sizeof(int2) * springCount), "cudaMalloc dSpringEnds")) return -1;
-    if (!CheckCuda(cudaMalloc(reinterpret_cast<void**>(&sys->dRestLengths), sizeof(float) * springCount), "cudaMalloc dRestLengths")) return -1;
+    sys->hPosition = hostPos;
+    sys->hVelocity.assign(static_cast<std::size_t>(particleCount), make_float4(0.0f, 0.0f, 0.0f, 0.0f));
+    sys->hForce.assign(static_cast<std::size_t>(particleCount), make_float4(0.0f, 0.0f, 0.0f, 0.0f));
+    sys->hMasses.assign(masses, masses + particleCount);
+    sys->hFixedMask.assign(fixedMask, fixedMask + particleCount);
+    sys->hSpringEnds = hostEnds;
+    sys->hRestLengths.assign(restLengths, restLengths + springCount);
 
-    if (!CheckCuda(cudaMemcpy(sys->dPosition, hostPos.data(), sizeof(float4) * particleCount, cudaMemcpyHostToDevice), "cudaMemcpy dPosition")) return -1;
-    if (!CheckCuda(cudaMemset(sys->dVelocity, 0, sizeof(float4) * particleCount), "cudaMemset dVelocity")) return -1;
-    if (!CheckCuda(cudaMemcpy(sys->dMasses, masses, sizeof(float) * particleCount, cudaMemcpyHostToDevice), "cudaMemcpy dMasses")) return -1;
-    if (!CheckCuda(cudaMemcpy(sys->dFixedMask, fixedMask, sizeof(uint8_t) * particleCount, cudaMemcpyHostToDevice), "cudaMemcpy dFixedMask")) return -1;
-    if (!CheckCuda(cudaMemcpy(sys->dSpringEnds, hostEnds.data(), sizeof(int2) * springCount, cudaMemcpyHostToDevice), "cudaMemcpy dSpringEnds")) return -1;
-    if (!CheckCuda(cudaMemcpy(sys->dRestLengths, restLengths, sizeof(float) * springCount, cudaMemcpyHostToDevice), "cudaMemcpy dRestLengths")) return -1;
+    if (sys->cudaAvailable)
+    {
+        if (!CheckCuda(cudaMalloc(reinterpret_cast<void**>(&sys->dPosition), sizeof(float4) * particleCount), "cudaMalloc dPosition"))
+        {
+            sys->cudaAvailable = false;
+        }
+        if (sys->cudaAvailable && !CheckCuda(cudaMalloc(reinterpret_cast<void**>(&sys->dVelocity), sizeof(float4) * particleCount), "cudaMalloc dVelocity"))
+        {
+            sys->cudaAvailable = false;
+        }
+        if (sys->cudaAvailable && !CheckCuda(cudaMalloc(reinterpret_cast<void**>(&sys->dMasses), sizeof(float) * particleCount), "cudaMalloc dMasses"))
+        {
+            sys->cudaAvailable = false;
+        }
+        if (sys->cudaAvailable && !CheckCuda(cudaMalloc(reinterpret_cast<void**>(&sys->dFixedMask), sizeof(uint8_t) * particleCount), "cudaMalloc dFixedMask"))
+        {
+            sys->cudaAvailable = false;
+        }
+        if (sys->cudaAvailable && !CheckCuda(cudaMalloc(reinterpret_cast<void**>(&sys->dSpringEnds), sizeof(int2) * springCount), "cudaMalloc dSpringEnds"))
+        {
+            sys->cudaAvailable = false;
+        }
+        if (sys->cudaAvailable && !CheckCuda(cudaMalloc(reinterpret_cast<void**>(&sys->dRestLengths), sizeof(float) * springCount), "cudaMalloc dRestLengths"))
+        {
+            sys->cudaAvailable = false;
+        }
+
+        if (sys->cudaAvailable && !CheckCuda(cudaMemcpy(sys->dPosition, hostPos.data(), sizeof(float4) * particleCount, cudaMemcpyHostToDevice), "cudaMemcpy dPosition"))
+        {
+            sys->cudaAvailable = false;
+        }
+        if (sys->cudaAvailable && !CheckCuda(cudaMemset(sys->dVelocity, 0, sizeof(float4) * particleCount), "cudaMemset dVelocity"))
+        {
+            sys->cudaAvailable = false;
+        }
+        if (sys->cudaAvailable && !CheckCuda(cudaMemcpy(sys->dMasses, masses, sizeof(float) * particleCount, cudaMemcpyHostToDevice), "cudaMemcpy dMasses"))
+        {
+            sys->cudaAvailable = false;
+        }
+        if (sys->cudaAvailable && !CheckCuda(cudaMemcpy(sys->dFixedMask, fixedMask, sizeof(uint8_t) * particleCount, cudaMemcpyHostToDevice), "cudaMemcpy dFixedMask"))
+        {
+            sys->cudaAvailable = false;
+        }
+        if (sys->cudaAvailable && !CheckCuda(cudaMemcpy(sys->dSpringEnds, hostEnds.data(), sizeof(int2) * springCount, cudaMemcpyHostToDevice), "cudaMemcpy dSpringEnds"))
+        {
+            sys->cudaAvailable = false;
+        }
+        if (sys->cudaAvailable && !CheckCuda(cudaMemcpy(sys->dRestLengths, restLengths, sizeof(float) * springCount, cudaMemcpyHostToDevice), "cudaMemcpy dRestLengths"))
+        {
+            sys->cudaAvailable = false;
+        }
+    }
 
     if (!EnsureBuffers(*sys))
     {
@@ -767,6 +936,20 @@ MSS_API int mssStepSemi(void* system, const MssSemiParams* stepParams)
     if (!EnsureBuffers(*sys))
     {
         return -1;
+    }
+
+    if (!sys->cudaAvailable)
+    {
+        int substeps = std::max(1, stepParams->substeps);
+        float dtSub = stepParams->dt / static_cast<float>(substeps);
+        for (int iter = 0; iter < substeps; ++iter)
+        {
+            ComputeForcesSemiHost(*sys, stepParams->springStiffness, stepParams->springDamping, make_float3(stepParams->gravityX, stepParams->gravityY, stepParams->gravityZ));
+            IntegrateSemiHost(*sys, dtSub, stepParams->velocityDamping);
+        }
+
+        gLastError.clear();
+        return 0;
     }
 
     const int pBlocks = DivUp(sys->particleCount, kBlockSize);
@@ -839,6 +1022,12 @@ MSS_API int mssStepImplicit(void* system, const MssImplicitParams* stepParams)
 
     if (!EnsureBuffers(*sys))
     {
+        return -1;
+    }
+
+    if (!sys->cudaAvailable)
+    {
+        SetError("cuda unavailable for implicit path");
         return -1;
     }
 
@@ -964,6 +1153,23 @@ MSS_API int mssDownloadState(void* system, float* outPositionXYZ, float* outVelo
     {
         SetError("mssDownloadState invalid arguments");
         return -1;
+    }
+
+    if (!sys->cudaAvailable)
+    {
+        for (int i = 0; i < particleCount; ++i)
+        {
+            int base = i * 3;
+            outPositionXYZ[base] = sys->hPosition[i].x;
+            outPositionXYZ[base + 1] = sys->hPosition[i].y;
+            outPositionXYZ[base + 2] = sys->hPosition[i].z;
+            outVelocityXYZ[base] = sys->hVelocity[i].x;
+            outVelocityXYZ[base + 1] = sys->hVelocity[i].y;
+            outVelocityXYZ[base + 2] = sys->hVelocity[i].z;
+        }
+
+        gLastError.clear();
+        return 0;
     }
 
     std::vector<float4> hostPos(static_cast<std::size_t>(particleCount));
