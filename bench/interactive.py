@@ -14,7 +14,9 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import Iterable, Iterator
+from typing import Iterable, Iterator, Callable, Optional
+import math
+import random
 
 OUTPUT_RE = re.compile(r"Output\s*->\s*x=(?P<x>-?[0-9]*\.?[0-9]+)\s*,\s*v=(?P<v>-?[0-9]*\.?[0-9]+)")
 
@@ -26,18 +28,77 @@ def parse_output_line(line: str) -> tuple[float, float] | None:
     return float(m.group("x")), float(m.group("v"))
 
 
-def generate_sequence(initial_x: float, initial_v: float, dt: float, mass: float, stiffness: float, damping: float, steps: int) -> Iterator[str]:
-    """Yield parameter lines to send to the binary.
+def strategy_hold(step: int, last_x: float, last_v: float, dt: float, mass: float, stiffness: float, damping: float) -> str:
+    return f"{last_x} {last_v} {dt} {mass} {stiffness} {damping} 1\n"
 
-    Each yielded line is: position velocity dt mass stiffness damping steps
-    Modify this generator to sweep parameters or apply time-varying forces.
-    """
-    x = initial_x
-    v = initial_v
-    for i in range(steps):
-        # Example: simple sequence that keeps same params but feeds new state each timestep.
-        yield f"{x} {v} {dt} {mass} {stiffness} {damping} 1\n"
-        # The harness will update x,v from the binary output; here we just yield current state.
+
+def strategy_sine_k(step: int, last_x: float, last_v: float, dt: float, mass: float, stiffness: float, damping: float, amp: float = 0.2, freq: float = 1.0) -> str:
+    k = stiffness * (1.0 + amp * math.sin(2.0 * math.pi * freq * step))
+    return f"{last_x} {last_v} {dt} {mass} {k} {damping} 1\n"
+
+
+def strategy_noise_k(step: int, last_x: float, last_v: float, dt: float, mass: float, stiffness: float, damping: float, scale: float = 0.1) -> str:
+    k = stiffness * (1.0 + scale * (2.0 * random.random() - 1.0))
+    return f"{last_x} {last_v} {dt} {mass} {k} {damping} 1\n"
+
+
+def strategy_grid_k(step: int, last_x: float, last_v: float, dt: float, mass: float, stiffness: float, damping: float, grid_values: list[float] | None = None) -> str:
+    if not grid_values:
+        k = stiffness
+    else:
+        k = grid_values[step % len(grid_values)]
+    return f"{last_x} {last_v} {dt} {mass} {k} {damping} 1\n"
+
+
+def run_loop_strategy(
+    binary: Path,
+    steps: int,
+    x0: float,
+    v0: float,
+    dt: float,
+    mass: float,
+    stiffness: float,
+    damping: float,
+    strategy: Callable[..., str],
+    strategy_kwargs: Optional[dict] = None,
+):
+    cmd = [str(binary), "--interactive"]
+    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+    if proc.stdin is None or proc.stdout is None:
+        raise RuntimeError("Failed to open subprocess pipes")
+
+    last_x = x0
+    last_v = v0
+    sample = 0
+    strategy_kwargs = strategy_kwargs or {}
+
+    try:
+        for step in range(steps):
+            sample += 1
+            line = strategy(step, last_x, last_v, dt, mass, stiffness, damping, **strategy_kwargs)
+            proc.stdin.write(line)
+            proc.stdin.flush()
+
+            # Read stdout lines until we find an Output line
+            while True:
+                out_line = proc.stdout.readline()
+                if out_line == "":
+                    # EOF
+                    raise RuntimeError("Subprocess terminated unexpectedly")
+                parsed = parse_output_line(out_line)
+                if parsed is not None:
+                    last_x, last_v = parsed
+                    yield sample, last_x, last_v
+                    break
+                # otherwise keep reading (could be Input or debug text)
+    finally:
+        try:
+            proc.stdin.close()
+        except Exception:
+            pass
+        proc.terminate()
+        proc.wait(timeout=1)
 
 
 def run_interactive(binary: Path, lines: Iterable[str]) -> Iterator[tuple[int, float, float]]:
@@ -85,11 +146,45 @@ def main() -> None:
     parser.add_argument("--stiffness", type=float, default=120.0)
     parser.add_argument("--damping", type=float, default=0.2)
     parser.add_argument("--steps", type=int, default=10, help="Number of interactive steps to run")
+    parser.add_argument("--mode", type=str, default="hold", choices=["hold", "sine_k", "noise_k", "grid_k"], help="Driving mode for parameters")
+    parser.add_argument("--amp", type=float, default=0.2, help="Amplitude for sine_k mode")
+    parser.add_argument("--freq", type=float, default=1.0, help="Frequency (Hz) for sine_k mode")
+    parser.add_argument("--scale", type=float, default=0.1, help="Scale for noise_k mode")
+    parser.add_argument("--grid-start", type=float, default=60.0, help="Grid start k for grid_k mode")
+    parser.add_argument("--grid-end", type=float, default=180.0, help="Grid end k for grid_k mode")
+    parser.add_argument("--grid-steps", type=int, default=6, help="Number of grid points for grid_k mode")
+    parser.add_argument("--seed", type=int, default=None, help="Random seed for noise_k")
     args = parser.parse_args()
 
-    seq = generate_sequence(args.x0, args.v0, args.dt, args.mass, args.stiffness, args.damping, args.steps)
+    strategy = strategy_hold
+    strategy_kwargs = {}
+    if args.mode == "hold":
+        strategy = strategy_hold
+    elif args.mode == "sine_k":
+        strategy = strategy_sine_k
+        strategy_kwargs = {"amp": args.amp, "freq": args.freq}
+    elif args.mode == "noise_k":
+        strategy = strategy_noise_k
+        strategy_kwargs = {"scale": args.scale}
+        if args.seed is not None:
+            random.seed(args.seed)
+    elif args.mode == "grid_k":
+        grid_values = [args.grid_start + (args.grid_end - args.grid_start) * i / max(1, args.grid_steps - 1) for i in range(args.grid_steps)]
+        strategy = strategy_grid_k
+        strategy_kwargs = {"grid_values": grid_values}
 
-    for sample, x, v in run_interactive(args.binary, seq):
+    for sample, x, v in run_loop_strategy(
+        args.binary,
+        args.steps,
+        args.x0,
+        args.v0,
+        args.dt,
+        args.mass,
+        args.stiffness,
+        args.damping,
+        strategy,
+        strategy_kwargs,
+    ):
         print(f"step {sample}: x={x:.6f}, v={v:.6f}")
 
 
