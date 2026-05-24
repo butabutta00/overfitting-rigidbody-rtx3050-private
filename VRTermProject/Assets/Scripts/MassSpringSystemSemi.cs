@@ -247,15 +247,7 @@ public class MassSpringSystemSemi : MonoBehaviour
 
         if (nativeReady && computeBackend == ComputeBackend.NativeCuda)
         {
-            bool ok = nativeSystem.StepSemi(
-                timeStep,
-                springStiffness,
-                springDamping,
-                gravity,
-                0.995f,
-                1);
-
-            if (ok && nativeSystem.DownloadState(nativePositions, nativeVelocities))
+            if (TryStepNativeSemi())
             {
                 SyncParticlesFromNative();
             }
@@ -306,6 +298,36 @@ public class MassSpringSystemSemi : MonoBehaviour
         }
 
         Integrate();
+    }
+
+    private bool TryStepNativeSemi()
+    {
+        if (nativeSystem == null)
+        {
+            return false;
+        }
+
+        try
+        {
+            bool ok = nativeSystem.StepSemi(
+                timeStep,
+                springStiffness,
+                springDamping,
+                gravity,
+                0.995f,
+                1);
+
+            if (!ok)
+            {
+                return false;
+            }
+
+            return nativeSystem.DownloadState(nativePositions, nativeVelocities);
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private void SyncParticlesFromNative()

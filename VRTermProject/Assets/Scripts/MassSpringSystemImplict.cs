@@ -273,17 +273,7 @@ public class MassSpringSystemImplict : MonoBehaviour
 
             if (nativeReady && computeBackend == ComputeBackend.NativeCuda)
             {
-                float effectiveDt = timeStep * Mathf.Max(1, framesSkippingCompute);
-                bool ok = nativeSystem.StepImplicit(
-                    effectiveDt,
-                    springStiffness,
-                    springDamping,
-                    gravity,
-                    0.995f,
-                    implicitIterations,
-                    1e-8f);
-
-                if (ok && nativeSystem.DownloadState(nativePositions, nativeVelocities))
+                if (TryStepNativeImplicit())
                 {
                     SyncParticlesFromNative();
                 }
@@ -552,6 +542,38 @@ public class MassSpringSystemImplict : MonoBehaviour
         }
 
         GUI.Label(new Rect(20, 85, 270, 20), $"dt x Rate Product: {productValue:F3} (Target: 1.0)", labelStyle);
+    }
+
+    private bool TryStepNativeImplicit()
+    {
+        if (nativeSystem == null)
+        {
+            return false;
+        }
+
+        try
+        {
+            float effectiveDt = timeStep * Mathf.Max(1, framesSkippingCompute);
+            bool ok = nativeSystem.StepImplicit(
+                effectiveDt,
+                springStiffness,
+                springDamping,
+                gravity,
+                0.995f,
+                implicitIterations,
+                1e-8f);
+
+            if (!ok)
+            {
+                return false;
+            }
+
+            return nativeSystem.DownloadState(nativePositions, nativeVelocities);
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private void SyncParticlesFromNative()

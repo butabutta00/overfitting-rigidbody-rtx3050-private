@@ -123,7 +123,7 @@ public class OneDOFSpringMassCustomized : MonoBehaviour
 
         if (useNativeImplicitSolver)
         {
-            bool ok = MassSpringNativeInterop.TryStepOneDImplicit(ref positionX, ref velocityX, timeStep, mass, springStiffness, springDamping);
+            bool ok = TryStepNativeOneD();
             if (!ok)
             {
                 useNativeImplicitSolver = false;
@@ -143,6 +143,18 @@ public class OneDOFSpringMassCustomized : MonoBehaviour
 
         velocityX = newVelocity;
         positionX = newPosition;
+    }
+
+    private bool TryStepNativeOneD()
+    {
+        try
+        {
+            return MassSpringNativeInterop.TryStepOneDImplicit(ref positionX, ref velocityX, timeStep, mass, springStiffness, springDamping);
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private void UpdateImplicitCoefficientsIfNeeded()
