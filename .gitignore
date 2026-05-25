@@ -27,3 +27,7 @@ CMakeUserPresets.json
 *.ptx
 *.cubin
 *.fatbin
+
+# .NET
+**/bin/
+**/obj/

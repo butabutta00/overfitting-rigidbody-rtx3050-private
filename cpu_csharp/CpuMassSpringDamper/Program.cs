@@ -2,8 +2,6 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Numerics;
 
-const float Epsilon = 1e-6f;
-
 var options = CliOptions.Parse(args);
 
 var system = CpuMassSpringSystem.CreateChain(
@@ -51,6 +49,8 @@ readonly record struct SpringEdge(int A, int B, float RestLength);
 
 sealed class CpuMassSpringSystem
 {
+    private const float Epsilon = 1e-6f;
+
     private readonly float[] _masses;
     private readonly bool[] _fixedMask;
     private readonly SpringEdge[] _springs;
