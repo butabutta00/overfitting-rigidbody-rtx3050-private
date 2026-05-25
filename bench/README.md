@@ -2,7 +2,7 @@
 
 이제 bench Python 코드는 **CUDA vs C# 비교 벤치마크**만 수행합니다.
 
-- `main.py` : CUDA(`cuda/main.cu` 엔트리포인트)와 C#(`cpu_csharp/CpuMassSpringDamper`)를 같은 샘플 수로 반복 실행하여 시간 비교
+- `main.py` : CUDA(`cuda/main.cu`)와 C#(`cpu_csharp/CpuMassSpringDamper`)를 **동일 인자 규격**으로 실행해 결과/시간 비교
 
 사전 요구사항
 - Python 3
@@ -24,11 +24,8 @@ python3 bench/main.py --samples 20 --warmup 4
 # CUDA/C# 빌드 생략 (이미 빌드된 상태에서)
 python3 bench/main.py --skip-cuda-build --skip-csharp-build
 
-# CUDA 입력 파라미터 변경
-python3 bench/main.py --cuda-dt 0.016 --cuda-stiffness 120 --cuda-damping 0.2 --cuda-steps 8
-
-# C# 입력 파라미터 변경
-python3 bench/main.py --csharp-particles 16384 --csharp-steps 400 --csharp-substeps 2 --csharp-stiffness 120 --csharp-damping 0.2
+# 공통 입력 파라미터 변경 (CUDA/C# 모두 동일하게 적용)
+python3 bench/main.py --position 1.0 --velocity 0.0 --dt 0.016 --mass 1.0 --stiffness 120 --damping 0.2 --steps 200
 ```
 
 출력
@@ -36,12 +33,13 @@ python3 bench/main.py --csharp-particles 16384 --csharp-steps 400 --csharp-subst
 - 파일: `bench/results/<timestamp>/cuda_vs_csharp_samples.csv`
 
 CSV 필드
-- `cuda_wall_ms`
-- `csharp_wall_ms`
-- `csharp_reported_ms`
-- `wall_speedup_cuda_over_csharp`
-- `reported_speedup_cuda_over_csharp`
+- `cuda_elapsed_ms`, `csharp_elapsed_ms`
+- `cuda_output_x`, `cuda_output_v`, `cuda_checksum`
+- `csharp_output_x`, `csharp_output_v`, `csharp_checksum`
+- `abs_diff_output_x`, `abs_diff_output_v`, `abs_diff_checksum`
+- `cuda_wall_ms`, `csharp_wall_ms`
+- `wall_speedup_cuda_over_csharp`, `elapsed_speedup_cuda_over_csharp`
 
 참고
-- `csharp_wall_ms`는 Python 프로세스 외부에서 측정한 실행 시간
-- `csharp_reported_ms`는 C# 프로그램 내부에서 출력한 시뮬레이션 루프 시간
+- 두 바이너리는 동일 key=value 출력 필드(`elapsed_ms`, `output_x`, `output_v`, `checksum`)를 사용합니다.
+- `*_wall_ms`는 Python이 프로세스 외부에서 측정한 실행 시간입니다.

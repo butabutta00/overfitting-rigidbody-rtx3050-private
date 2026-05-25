@@ -9,15 +9,15 @@ import subprocess
 import time
 from pathlib import Path
 
-CUDA_OUTPUT_RE = re.compile(r"Output\s*->\s*x=(?P<x>-?[0-9]*\.?[0-9]+)\s*,\s*v=(?P<v>-?[0-9]*\.?[0-9]+)")
-CSHARP_ELAPSED_RE = re.compile(r"elapsed_ms=(?P<elapsed>-?[0-9]*\.?[0-9]+)")
-CSHARP_CHECKSUM_RE = re.compile(r"checksum=(?P<checksum>-?[0-9]*\.?[0-9]+)")
+KEY_VALUE_RE = re.compile(
+    r"(?P<key>[A-Za-z_][A-Za-z0-9_]*)=(?P<value>-?[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?)"
+)
 
 
 def parse_args() -> argparse.Namespace:
     repo_root = Path(__file__).resolve().parents[1]
     parser = argparse.ArgumentParser(
-        description="CUDA main.cu vs C# CPU spring-mass-damper benchmark comparator."
+        description="Run CUDA and C# benchmarks with the same 1D spring-mass-damper I/O spec."
     )
 
     parser.add_argument("--samples", type=int, default=10, help="Number of measured runs")
@@ -33,13 +33,6 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--cuda-arch", type=str, default="86-real;86-virtual", help="CUDA arch arg")
     parser.add_argument("--cuda-binary", type=Path, default=repo_root / "cuda" / "build" / "main", help="CUDA binary path")
-    parser.add_argument("--cuda-position", type=float, default=1.0)
-    parser.add_argument("--cuda-velocity", type=float, default=0.0)
-    parser.add_argument("--cuda-dt", type=float, default=0.016)
-    parser.add_argument("--cuda-mass", type=float, default=1.0)
-    parser.add_argument("--cuda-stiffness", type=float, default=120.0)
-    parser.add_argument("--cuda-damping", type=float, default=0.2)
-    parser.add_argument("--cuda-steps", type=int, default=8)
 
     parser.add_argument("--skip-csharp-build", action="store_true", help="Skip C# build")
     parser.add_argument(
@@ -48,18 +41,14 @@ def parse_args() -> argparse.Namespace:
         default=repo_root / "cpu_csharp" / "CpuMassSpringDamper" / "CpuMassSpringDamper.csproj",
         help="C# project path",
     )
-    parser.add_argument("--csharp-particles", type=int, default=8192)
-    parser.add_argument("--csharp-steps", type=int, default=200)
-    parser.add_argument("--csharp-substeps", type=int, default=1)
-    parser.add_argument("--csharp-dt", type=float, default=0.016)
-    parser.add_argument("--csharp-stiffness", type=float, default=120.0)
-    parser.add_argument("--csharp-damping", type=float, default=0.2)
-    parser.add_argument("--csharp-velocity-damping", type=float, default=0.999)
-    parser.add_argument("--csharp-gravity-y", type=float, default=-9.81)
-    parser.add_argument("--csharp-mass", type=float, default=1.0)
-    parser.add_argument("--csharp-spacing", type=float, default=0.1)
-    parser.add_argument("--csharp-fixed-first", type=str, default="true", choices=["true", "false", "1", "0"])
 
+    parser.add_argument("--position", type=float, default=1.0, help="Initial position")
+    parser.add_argument("--velocity", type=float, default=0.0, help="Initial velocity")
+    parser.add_argument("--dt", type=float, default=0.016, help="Time-step")
+    parser.add_argument("--mass", type=float, default=1.0, help="Mass")
+    parser.add_argument("--stiffness", type=float, default=120.0, help="Spring stiffness")
+    parser.add_argument("--damping", type=float, default=0.2, help="Spring damping")
+    parser.add_argument("--steps", type=int, default=200, help="Integration steps")
     return parser.parse_args()
 
 
@@ -89,28 +78,18 @@ def summarize(values: list[float]) -> dict[str, float]:
     }
 
 
-def parse_cuda_state(stdout: str) -> tuple[float, float]:
-    for line in stdout.splitlines():
-        m = CUDA_OUTPUT_RE.search(line)
-        if m:
-            return float(m.group("x")), float(m.group("v"))
-    raise RuntimeError(f"Failed to parse CUDA output state.\nSTDOUT:\n{stdout}")
+def parse_kv_metrics(stdout: str) -> dict[str, float]:
+    metrics: dict[str, float] = {}
+    for match in KEY_VALUE_RE.finditer(stdout):
+        metrics[match.group("key")] = float(match.group("value"))
+    return metrics
 
 
-def parse_csharp_metrics(stdout: str) -> tuple[float, float]:
-    elapsed = None
-    checksum = None
-    for line in stdout.splitlines():
-        m_elapsed = CSHARP_ELAPSED_RE.search(line)
-        if m_elapsed:
-            elapsed = float(m_elapsed.group("elapsed"))
-        m_checksum = CSHARP_CHECKSUM_RE.search(line)
-        if m_checksum:
-            checksum = float(m_checksum.group("checksum"))
-
-    if elapsed is None or checksum is None:
-        raise RuntimeError(f"Failed to parse C# benchmark output.\nSTDOUT:\n{stdout}")
-    return elapsed, checksum
+def require_metrics(label: str, metrics: dict[str, float], required: list[str], stdout: str) -> dict[str, float]:
+    missing = [key for key in required if key not in metrics]
+    if missing:
+        raise RuntimeError(f"Failed to parse {label} metrics: missing {missing}\nSTDOUT:\n{stdout}")
+    return metrics
 
 
 def resolve_cuda_binary(binary: Path) -> Path:
@@ -143,23 +122,34 @@ def build_csharp(args: argparse.Namespace) -> None:
     run_command(["dotnet", "build", "-c", "Release", str(project)], "C# build failed.")
 
 
-def run_cuda(args: argparse.Namespace, cuda_binary: Path) -> tuple[float, float, float]:
-    command = [
-        str(cuda_binary),
-        str(args.cuda_position),
-        str(args.cuda_velocity),
-        str(args.cuda_dt),
-        str(args.cuda_mass),
-        str(args.cuda_stiffness),
-        str(args.cuda_damping),
-        str(args.cuda_steps),
+def benchmark_args(args: argparse.Namespace) -> list[str]:
+    return [
+        "--position",
+        str(args.position),
+        "--velocity",
+        str(args.velocity),
+        "--dt",
+        str(args.dt),
+        "--mass",
+        str(args.mass),
+        "--stiffness",
+        str(args.stiffness),
+        "--damping",
+        str(args.damping),
+        "--steps",
+        str(args.steps),
     ]
-    elapsed_ms, stdout = run_command(command, "CUDA run failed.")
-    out_x, out_v = parse_cuda_state(stdout)
-    return elapsed_ms, out_x, out_v
 
 
-def run_csharp(args: argparse.Namespace) -> tuple[float, float, float]:
+def run_cuda(args: argparse.Namespace, cuda_binary: Path) -> tuple[float, dict[str, float]]:
+    command = [str(cuda_binary), *benchmark_args(args)]
+    wall_ms, stdout = run_command(command, "CUDA run failed.")
+    metrics = parse_kv_metrics(stdout)
+    require_metrics("CUDA", metrics, ["elapsed_ms", "output_x", "output_v", "checksum"], stdout)
+    return wall_ms, metrics
+
+
+def run_csharp(args: argparse.Namespace) -> tuple[float, dict[str, float]]:
     project = args.csharp_project.resolve()
     command = [
         "dotnet",
@@ -169,32 +159,12 @@ def run_csharp(args: argparse.Namespace) -> tuple[float, float, float]:
         "--project",
         str(project),
         "--",
-        "--particles",
-        str(args.csharp_particles),
-        "--steps",
-        str(args.csharp_steps),
-        "--substeps",
-        str(args.csharp_substeps),
-        "--dt",
-        str(args.csharp_dt),
-        "--stiffness",
-        str(args.csharp_stiffness),
-        "--damping",
-        str(args.csharp_damping),
-        "--velocity-damping",
-        str(args.csharp_velocity_damping),
-        "--gravity-y",
-        str(args.csharp_gravity_y),
-        "--mass",
-        str(args.csharp_mass),
-        "--spacing",
-        str(args.csharp_spacing),
-        "--fixed-first",
-        args.csharp_fixed_first,
+        *benchmark_args(args),
     ]
-    elapsed_ms, stdout = run_command(command, "C# run failed.")
-    reported_elapsed_ms, checksum = parse_csharp_metrics(stdout)
-    return elapsed_ms, reported_elapsed_ms, checksum
+    wall_ms, stdout = run_command(command, "C# run failed.")
+    metrics = parse_kv_metrics(stdout)
+    require_metrics("C#", metrics, ["elapsed_ms", "output_x", "output_v", "checksum"], stdout)
+    return wall_ms, metrics
 
 
 def save_csv(output_dir: Path, rows: list[dict[str, float]]) -> Path:
@@ -205,13 +175,20 @@ def save_csv(output_dir: Path, rows: list[dict[str, float]]) -> Path:
             fieldnames=[
                 "sample",
                 "cuda_wall_ms",
-                "cuda_out_x",
-                "cuda_out_v",
+                "cuda_elapsed_ms",
+                "cuda_output_x",
+                "cuda_output_v",
+                "cuda_checksum",
                 "csharp_wall_ms",
-                "csharp_reported_ms",
+                "csharp_elapsed_ms",
+                "csharp_output_x",
+                "csharp_output_v",
                 "csharp_checksum",
                 "wall_speedup_cuda_over_csharp",
-                "reported_speedup_cuda_over_csharp",
+                "elapsed_speedup_cuda_over_csharp",
+                "abs_diff_output_x",
+                "abs_diff_output_v",
+                "abs_diff_checksum",
             ],
         )
         writer.writeheader()
@@ -224,6 +201,8 @@ def main() -> None:
     args = parse_args()
     if args.samples < 1 or args.warmup < 0:
         raise ValueError("samples must be >= 1 and warmup must be >= 0")
+    if args.steps < 1:
+        raise ValueError("steps must be >= 1")
 
     build_cuda(args)
     build_csharp(args)
@@ -234,41 +213,63 @@ def main() -> None:
         run_csharp(args)
 
     rows: list[dict[str, float]] = []
+    cuda_elapsed_values: list[float] = []
+    csharp_elapsed_values: list[float] = []
     cuda_wall_values: list[float] = []
     csharp_wall_values: list[float] = []
-    csharp_reported_values: list[float] = []
+    diff_checksum_values: list[float] = []
 
     for i in range(1, args.samples + 1):
-        cuda_wall_ms, cuda_x, cuda_v = run_cuda(args, cuda_binary)
-        csharp_wall_ms, csharp_reported_ms, csharp_checksum = run_csharp(args)
+        cuda_wall_ms, cuda_metrics = run_cuda(args, cuda_binary)
+        csharp_wall_ms, csharp_metrics = run_csharp(args)
+
+        cuda_elapsed_ms = cuda_metrics["elapsed_ms"]
+        csharp_elapsed_ms = csharp_metrics["elapsed_ms"]
+        cuda_x = cuda_metrics["output_x"]
+        cuda_v = cuda_metrics["output_v"]
+        cuda_checksum = cuda_metrics["checksum"]
+        csharp_x = csharp_metrics["output_x"]
+        csharp_v = csharp_metrics["output_v"]
+        csharp_checksum = csharp_metrics["checksum"]
 
         wall_ratio = cuda_wall_ms / csharp_wall_ms if csharp_wall_ms > 0.0 else 0.0
-        reported_ratio = cuda_wall_ms / csharp_reported_ms if csharp_reported_ms > 0.0 else 0.0
+        elapsed_ratio = cuda_elapsed_ms / csharp_elapsed_ms if csharp_elapsed_ms > 0.0 else 0.0
+        diff_x = abs(cuda_x - csharp_x)
+        diff_v = abs(cuda_v - csharp_v)
+        diff_checksum = abs(cuda_checksum - csharp_checksum)
 
         rows.append(
             {
                 "sample": i,
                 "cuda_wall_ms": cuda_wall_ms,
-                "cuda_out_x": cuda_x,
-                "cuda_out_v": cuda_v,
+                "cuda_elapsed_ms": cuda_elapsed_ms,
+                "cuda_output_x": cuda_x,
+                "cuda_output_v": cuda_v,
+                "cuda_checksum": cuda_checksum,
                 "csharp_wall_ms": csharp_wall_ms,
-                "csharp_reported_ms": csharp_reported_ms,
+                "csharp_elapsed_ms": csharp_elapsed_ms,
+                "csharp_output_x": csharp_x,
+                "csharp_output_v": csharp_v,
                 "csharp_checksum": csharp_checksum,
                 "wall_speedup_cuda_over_csharp": wall_ratio,
-                "reported_speedup_cuda_over_csharp": reported_ratio,
+                "elapsed_speedup_cuda_over_csharp": elapsed_ratio,
+                "abs_diff_output_x": diff_x,
+                "abs_diff_output_v": diff_v,
+                "abs_diff_checksum": diff_checksum,
             }
         )
 
         cuda_wall_values.append(cuda_wall_ms)
         csharp_wall_values.append(csharp_wall_ms)
-        csharp_reported_values.append(csharp_reported_ms)
+        cuda_elapsed_values.append(cuda_elapsed_ms)
+        csharp_elapsed_values.append(csharp_elapsed_ms)
+        diff_checksum_values.append(diff_checksum)
 
         print(
             f"sample {i}/{args.samples}: "
-            f"cuda_wall={cuda_wall_ms:.3f}ms, "
-            f"csharp_wall={csharp_wall_ms:.3f}ms, "
-            f"csharp_reported={csharp_reported_ms:.3f}ms, "
-            f"wall_ratio(cuda/csharp)={wall_ratio:.4f}"
+            f"cuda_elapsed={cuda_elapsed_ms:.3f}ms, "
+            f"csharp_elapsed={csharp_elapsed_ms:.3f}ms, "
+            f"abs_diff_checksum={diff_checksum:.6f}"
         )
 
     stamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -276,16 +277,32 @@ def main() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     csv_path = save_csv(output_dir, rows)
 
-    cuda_stats = summarize(cuda_wall_values)
+    cuda_elapsed_stats = summarize(cuda_elapsed_values)
+    csharp_elapsed_stats = summarize(csharp_elapsed_values)
+    cuda_wall_stats = summarize(cuda_wall_values)
     csharp_wall_stats = summarize(csharp_wall_values)
-    csharp_reported_stats = summarize(csharp_reported_values)
+    diff_checksum_stats = summarize(diff_checksum_values)
 
-    print("\n=== CUDA vs C# Benchmark Summary ===")
-    print(f"samples={args.samples}, warmup={args.warmup}")
+    print("\n=== CUDA vs C# Common-Spec Benchmark Summary ===")
+    print(
+        f"samples={args.samples}, warmup={args.warmup}, "
+        f"x0={args.position}, v0={args.velocity}, dt={args.dt}, "
+        f"mass={args.mass}, stiffness={args.stiffness}, damping={args.damping}, steps={args.steps}"
+    )
+    print(
+        "cuda elapsed(ms): "
+        f"mean={cuda_elapsed_stats['mean']:.3f}, median={cuda_elapsed_stats['median']:.3f}, "
+        f"min={cuda_elapsed_stats['min']:.3f}, max={cuda_elapsed_stats['max']:.3f}, stdev={cuda_elapsed_stats['stdev']:.3f}"
+    )
+    print(
+        "csharp elapsed(ms): "
+        f"mean={csharp_elapsed_stats['mean']:.3f}, median={csharp_elapsed_stats['median']:.3f}, "
+        f"min={csharp_elapsed_stats['min']:.3f}, max={csharp_elapsed_stats['max']:.3f}, stdev={csharp_elapsed_stats['stdev']:.3f}"
+    )
     print(
         "cuda wall(ms): "
-        f"mean={cuda_stats['mean']:.3f}, median={cuda_stats['median']:.3f}, "
-        f"min={cuda_stats['min']:.3f}, max={cuda_stats['max']:.3f}, stdev={cuda_stats['stdev']:.3f}"
+        f"mean={cuda_wall_stats['mean']:.3f}, median={cuda_wall_stats['median']:.3f}, "
+        f"min={cuda_wall_stats['min']:.3f}, max={cuda_wall_stats['max']:.3f}, stdev={cuda_wall_stats['stdev']:.3f}"
     )
     print(
         "csharp wall(ms): "
@@ -293,9 +310,9 @@ def main() -> None:
         f"min={csharp_wall_stats['min']:.3f}, max={csharp_wall_stats['max']:.3f}, stdev={csharp_wall_stats['stdev']:.3f}"
     )
     print(
-        "csharp reported(ms): "
-        f"mean={csharp_reported_stats['mean']:.3f}, median={csharp_reported_stats['median']:.3f}, "
-        f"min={csharp_reported_stats['min']:.3f}, max={csharp_reported_stats['max']:.3f}, stdev={csharp_reported_stats['stdev']:.3f}"
+        "abs diff checksum: "
+        f"mean={diff_checksum_stats['mean']:.6f}, median={diff_checksum_stats['median']:.6f}, "
+        f"min={diff_checksum_stats['min']:.6f}, max={diff_checksum_stats['max']:.6f}, stdev={diff_checksum_stats['stdev']:.6f}"
     )
     print(f"Saved CSV: {csv_path}")
 
