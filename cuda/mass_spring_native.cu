@@ -46,6 +46,7 @@ struct DeviceSystem
     float hDotValue = 0.0f;
 
     bool cudaAvailable = false;
+    bool kernelAttributesConfigured = false;
 
     std::vector<float4> hPosition;
     std::vector<float4> hVelocity;
@@ -79,31 +80,41 @@ inline bool CheckCuda(cudaError_t err, const char* where)
     return false;
 }
 
-__device__ inline float Dot3(const float4& a, const float4& b)
+template <typename T>
+__device__ __forceinline__ T ReadOnly(const T* ptr)
+{
+#if __CUDA_ARCH__ >= 350
+    return __ldg(ptr);
+#else
+    return *ptr;
+#endif
+}
+
+__device__ __forceinline__ float Dot3(const float4& a, const float4& b)
 {
     return a.x * b.x + a.y * b.y + a.z * b.z;
 }
 
-__device__ inline float4 Add3(const float4& a, const float4& b)
+__device__ __forceinline__ float4 Add3(const float4& a, const float4& b)
 {
     return make_float4(a.x + b.x, a.y + b.y, a.z + b.z, 0.0f);
 }
 
-__device__ inline float4 Sub3(const float4& a, const float4& b)
+__device__ __forceinline__ float4 Sub3(const float4& a, const float4& b)
 {
     return make_float4(a.x - b.x, a.y - b.y, a.z - b.z, 0.0f);
 }
 
-__device__ inline float4 Mul3(const float4& v, float s)
+__device__ __forceinline__ float4 Mul3(const float4& v, float s)
 {
     return make_float4(v.x * s, v.y * s, v.z * s, 0.0f);
 }
 
-__global__ void InitForcesKernel(
-    float4* force,
-    float4* jv,
-    const float* masses,
-    const uint8_t* fixedMask,
+__global__ __launch_bounds__(kBlockSize, 2) void InitForcesKernel(
+    float4* __restrict__ force,
+    float4* __restrict__ jv,
+    const float* __restrict__ masses,
+    const uint8_t* __restrict__ fixedMask,
     float3 gravity,
     int count)
 {
@@ -113,13 +124,13 @@ __global__ void InitForcesKernel(
         return;
     }
 
-    if (fixedMask[i])
+    if (ReadOnly(&fixedMask[i]))
     {
         force[i] = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
     }
     else
     {
-        float m = masses[i];
+        float m = ReadOnly(&masses[i]);
         force[i] = make_float4(gravity.x * m, gravity.y * m, gravity.z * m, 0.0f);
     }
 
@@ -130,12 +141,12 @@ __global__ void InitForcesKernel(
 }
 
 __global__ __launch_bounds__(kBlockSize, 2) void SpringForceKernel(
-    const float4* pos,
-    const float4* vel,
-    float4* force,
-    const int2* springEnds,
-    const float* restLengths,
-    const uint8_t* fixedMask,
+    const float4* __restrict__ pos,
+    const float4* __restrict__ vel,
+    float4* __restrict__ force,
+    const int2* __restrict__ springEnds,
+    const float* __restrict__ restLengths,
+    const uint8_t* __restrict__ fixedMask,
     float springStiffness,
     float springDamping,
     int springCount)
@@ -146,7 +157,7 @@ __global__ __launch_bounds__(kBlockSize, 2) void SpringForceKernel(
         return;
     }
 
-    int2 ends = springEnds[s];
+    int2 ends = ReadOnly(&springEnds[s]);
     int a = ends.x;
     int b = ends.y;
 
@@ -162,24 +173,24 @@ __global__ __launch_bounds__(kBlockSize, 2) void SpringForceKernel(
         return;
     }
 
-    float dist = sqrtf(dist2);
-    float invDist = 1.0f / dist;
+    float invDist = rsqrtf(dist2);
+    float dist = dist2 * invDist;
     float4 dir = Mul3(diff, invDist);
     float4 relVel = Sub3(vb, va);
 
     float relAlong = Dot3(relVel, dir);
-    float fSpring = springStiffness * (dist - restLengths[s]);
+    float fSpring = springStiffness * (dist - ReadOnly(&restLengths[s]));
     float fDamper = springDamping * relAlong;
     float4 total = Mul3(dir, fSpring + fDamper);
 
-    if (!fixedMask[a])
+    if (!ReadOnly(&fixedMask[a]))
     {
         atomicAdd(&force[a].x, total.x);
         atomicAdd(&force[a].y, total.y);
         atomicAdd(&force[a].z, total.z);
     }
 
-    if (!fixedMask[b])
+    if (!ReadOnly(&fixedMask[b]))
     {
         atomicAdd(&force[b].x, -total.x);
         atomicAdd(&force[b].y, -total.y);
@@ -188,11 +199,11 @@ __global__ __launch_bounds__(kBlockSize, 2) void SpringForceKernel(
 }
 
 __global__ __launch_bounds__(kBlockSize, 2) void IntegrateSemiKernel(
-    float4* pos,
-    float4* vel,
-    const float4* force,
-    const float* masses,
-    const uint8_t* fixedMask,
+    float4* __restrict__ pos,
+    float4* __restrict__ vel,
+    const float4* __restrict__ force,
+    const float* __restrict__ masses,
+    const uint8_t* __restrict__ fixedMask,
     float dt,
     float velocityDamping,
     int count)
@@ -203,13 +214,13 @@ __global__ __launch_bounds__(kBlockSize, 2) void IntegrateSemiKernel(
         return;
     }
 
-    if (fixedMask[i])
+    if (ReadOnly(&fixedMask[i]))
     {
         vel[i] = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
         return;
     }
 
-    float invMass = 1.0f / fmaxf(masses[i], kEpsilon);
+    float invMass = 1.0f / fmaxf(ReadOnly(&masses[i]), kEpsilon);
     float4 accel = Mul3(force[i], invMass);
 
     float4 v = vel[i];
@@ -235,14 +246,14 @@ __global__ void CopyStateKernel(const float4* srcPos, const float4* srcVel, floa
 }
 
 __global__ __launch_bounds__(kBlockSize, 2) void SpringLinearizeKernel(
-    const float4* x0,
-    const float4* v0,
-    float4* force,
-    float4* jv,
-    float4* linearized,
-    const int2* springEnds,
-    const float* restLengths,
-    const uint8_t* fixedMask,
+    const float4* __restrict__ x0,
+    const float4* __restrict__ v0,
+    float4* __restrict__ force,
+    float4* __restrict__ jv,
+    float4* __restrict__ linearized,
+    const int2* __restrict__ springEnds,
+    const float* __restrict__ restLengths,
+    const uint8_t* __restrict__ fixedMask,
     float springStiffness,
     float springDamping,
     float h,
@@ -255,7 +266,7 @@ __global__ __launch_bounds__(kBlockSize, 2) void SpringLinearizeKernel(
         return;
     }
 
-    int2 ends = springEnds[s];
+    int2 ends = ReadOnly(&springEnds[s]);
     int a = ends.x;
     int b = ends.y;
 
@@ -272,24 +283,24 @@ __global__ __launch_bounds__(kBlockSize, 2) void SpringLinearizeKernel(
         return;
     }
 
-    float dist = sqrtf(dist2);
-    float invDist = 1.0f / dist;
+    float invDist = rsqrtf(dist2);
+    float dist = dist2 * invDist;
     float4 dir = Mul3(diff, invDist);
     float4 relVel = Sub3(vb, va);
     float relAlong = Dot3(relVel, dir);
 
-    float fSpring = springStiffness * (dist - restLengths[s]);
+    float fSpring = springStiffness * (dist - ReadOnly(&restLengths[s]));
     float fDamper = springDamping * relAlong;
     float4 total = Mul3(dir, fSpring + fDamper);
 
-    if (!fixedMask[a])
+    if (!ReadOnly(&fixedMask[a]))
     {
         atomicAdd(&force[a].x, total.x);
         atomicAdd(&force[a].y, total.y);
         atomicAdd(&force[a].z, total.z);
     }
 
-    if (!fixedMask[b])
+    if (!ReadOnly(&fixedMask[b]))
     {
         atomicAdd(&force[b].x, -total.x);
         atomicAdd(&force[b].y, -total.y);
@@ -304,14 +315,14 @@ __global__ __launch_bounds__(kBlockSize, 2) void SpringLinearizeKernel(
     float4 jvA = Mul3(Sub3(projB, projA), springDamping);
     float4 jvB = Mul3(Sub3(projA, projB), springDamping);
 
-    if (!fixedMask[a])
+    if (!ReadOnly(&fixedMask[a]))
     {
         atomicAdd(&jv[a].x, jvA.x);
         atomicAdd(&jv[a].y, jvA.y);
         atomicAdd(&jv[a].z, jvA.z);
     }
 
-    if (!fixedMask[b])
+    if (!ReadOnly(&fixedMask[b]))
     {
         atomicAdd(&jv[b].x, jvB.x);
         atomicAdd(&jv[b].y, jvB.y);
@@ -321,15 +332,15 @@ __global__ __launch_bounds__(kBlockSize, 2) void SpringLinearizeKernel(
     linearized[s] = make_float4(dir.x, dir.y, dir.z, h * springDamping + h2 * springStiffness);
 }
 
-__global__ void BuildImplicitBKernel(
-    const float4* v0,
-    const float4* force,
-    const float4* jv,
-    const float* masses,
-    const uint8_t* fixedMask,
+__global__ __launch_bounds__(kBlockSize, 2) void BuildImplicitBKernel(
+    const float4* __restrict__ v0,
+    const float4* __restrict__ force,
+    const float4* __restrict__ jv,
+    const float* __restrict__ masses,
+    const uint8_t* __restrict__ fixedMask,
     float h,
-    float4* b,
-    float4* v,
+    float4* __restrict__ b,
+    float4* __restrict__ v,
     int count)
 {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
@@ -338,24 +349,24 @@ __global__ void BuildImplicitBKernel(
         return;
     }
 
-    if (fixedMask[i])
+    if (ReadOnly(&fixedMask[i]))
     {
         b[i] = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
         v[i] = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
         return;
     }
 
-    float m = masses[i];
+    float m = ReadOnly(&masses[i]);
     float4 rhs = Add3(Mul3(v0[i], m), Mul3(Sub3(force[i], jv[i]), h));
     b[i] = rhs;
     v[i] = v0[i];
 }
 
-__global__ void InitMassTermKernel(
-    const float4* src,
-    float4* dst,
-    const float* masses,
-    const uint8_t* fixedMask,
+__global__ __launch_bounds__(kBlockSize, 2) void InitMassTermKernel(
+    const float4* __restrict__ src,
+    float4* __restrict__ dst,
+    const float* __restrict__ masses,
+    const uint8_t* __restrict__ fixedMask,
     int count)
 {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
@@ -364,22 +375,22 @@ __global__ void InitMassTermKernel(
         return;
     }
 
-    if (fixedMask[i])
+    if (ReadOnly(&fixedMask[i]))
     {
         dst[i] = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
     }
     else
     {
-        dst[i] = Mul3(src[i], masses[i]);
+        dst[i] = Mul3(src[i], ReadOnly(&masses[i]));
     }
 }
 
 __global__ __launch_bounds__(kBlockSize, 2) void AccumulateImplicitMatrixKernel(
-    const float4* src,
-    float4* dst,
-    const float4* linearized,
-    const int2* springEnds,
-    const uint8_t* fixedMask,
+    const float4* __restrict__ src,
+    float4* __restrict__ dst,
+    const float4* __restrict__ linearized,
+    const int2* __restrict__ springEnds,
+    const uint8_t* __restrict__ fixedMask,
     int springCount)
 {
     int s = blockIdx.x * blockDim.x + threadIdx.x;
@@ -388,11 +399,11 @@ __global__ __launch_bounds__(kBlockSize, 2) void AccumulateImplicitMatrixKernel(
         return;
     }
 
-    int2 ends = springEnds[s];
+    int2 ends = ReadOnly(&springEnds[s]);
     int a = ends.x;
     int b = ends.y;
 
-    float4 lin = linearized[s];
+    float4 lin = ReadOnly(&linearized[s]);
     float coeff = lin.w;
     if (coeff == 0.0f)
     {
@@ -405,17 +416,17 @@ __global__ __launch_bounds__(kBlockSize, 2) void AccumulateImplicitMatrixKernel(
     float4 projA = Mul3(dir, dotA);
     float4 projB = Mul3(dir, dotB);
 
-    if (!fixedMask[a])
+    if (!ReadOnly(&fixedMask[a]))
     {
-        float4 term = Sub3(projA, fixedMask[b] ? make_float4(0.0f, 0.0f, 0.0f, 0.0f) : projB);
+        float4 term = Sub3(projA, ReadOnly(&fixedMask[b]) ? make_float4(0.0f, 0.0f, 0.0f, 0.0f) : projB);
         atomicAdd(&dst[a].x, coeff * term.x);
         atomicAdd(&dst[a].y, coeff * term.y);
         atomicAdd(&dst[a].z, coeff * term.z);
     }
 
-    if (!fixedMask[b])
+    if (!ReadOnly(&fixedMask[b]))
     {
-        float4 term = Sub3(projB, fixedMask[a] ? make_float4(0.0f, 0.0f, 0.0f, 0.0f) : projA);
+        float4 term = Sub3(projB, ReadOnly(&fixedMask[a]) ? make_float4(0.0f, 0.0f, 0.0f, 0.0f) : projA);
         atomicAdd(&dst[b].x, coeff * term.x);
         atomicAdd(&dst[b].y, coeff * term.y);
         atomicAdd(&dst[b].z, coeff * term.z);
@@ -432,12 +443,12 @@ __device__ inline float WarpReduceSum(float val)
     return val;
 }
 
-__global__ void DotPartialKernel(
-    const float4* a,
-    const float4* b,
-    const uint8_t* fixedMask,
+__global__ __launch_bounds__(kBlockSize, 2) void DotPartialKernel(
+    const float4* __restrict__ a,
+    const float4* __restrict__ b,
+    const uint8_t* __restrict__ fixedMask,
     int count,
-    float* partial)
+    float* __restrict__ partial)
 {
     __shared__ float warpSums[8];
 
@@ -446,7 +457,7 @@ __global__ void DotPartialKernel(
     float local = 0.0f;
     for (int i = idx; i < count; i += stride)
     {
-        if (!fixedMask[i])
+        if (!ReadOnly(&fixedMask[i]))
         {
             local += Dot3(a[i], b[i]);
         }
@@ -474,7 +485,7 @@ __global__ void DotPartialKernel(
     }
 }
 
-__global__ void ReducePartialSumKernel(const float* partial, int count, float* out)
+__global__ __launch_bounds__(kBlockSize, 2) void ReducePartialSumKernel(const float* __restrict__ partial, int count, float* __restrict__ out)
 {
     __shared__ float shared[kBlockSize];
     int tid = threadIdx.x;
@@ -503,7 +514,7 @@ __global__ void ReducePartialSumKernel(const float* partial, int count, float* o
     }
 }
 
-__global__ void InitCGKernel(const float4* b, const float4* ap, const uint8_t* fixedMask, float4* r, float4* p, int count)
+__global__ __launch_bounds__(kBlockSize, 2) void InitCGKernel(const float4* __restrict__ b, const float4* __restrict__ ap, const uint8_t* __restrict__ fixedMask, float4* __restrict__ r, float4* __restrict__ p, int count)
 {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= count)
@@ -511,7 +522,7 @@ __global__ void InitCGKernel(const float4* b, const float4* ap, const uint8_t* f
         return;
     }
 
-    if (fixedMask[i])
+    if (ReadOnly(&fixedMask[i]))
     {
         r[i] = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
         p[i] = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
@@ -523,7 +534,7 @@ __global__ void InitCGKernel(const float4* b, const float4* ap, const uint8_t* f
     p[i] = ri;
 }
 
-__global__ void CGUpdateXRKernel(float4* x, float4* r, const float4* p, const float4* ap, const uint8_t* fixedMask, float alpha, int count)
+__global__ __launch_bounds__(kBlockSize, 2) void CGUpdateXRKernel(float4* __restrict__ x, float4* __restrict__ r, const float4* __restrict__ p, const float4* __restrict__ ap, const uint8_t* __restrict__ fixedMask, float alpha, int count)
 {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= count)
@@ -531,7 +542,7 @@ __global__ void CGUpdateXRKernel(float4* x, float4* r, const float4* p, const fl
         return;
     }
 
-    if (fixedMask[i])
+    if (ReadOnly(&fixedMask[i]))
     {
         return;
     }
@@ -540,7 +551,7 @@ __global__ void CGUpdateXRKernel(float4* x, float4* r, const float4* p, const fl
     r[i] = Sub3(r[i], Mul3(ap[i], alpha));
 }
 
-__global__ void CGUpdatePKernel(float4* p, const float4* r, const uint8_t* fixedMask, float beta, int count)
+__global__ __launch_bounds__(kBlockSize, 2) void CGUpdatePKernel(float4* __restrict__ p, const float4* __restrict__ r, const uint8_t* __restrict__ fixedMask, float beta, int count)
 {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= count)
@@ -548,7 +559,7 @@ __global__ void CGUpdatePKernel(float4* p, const float4* r, const uint8_t* fixed
         return;
     }
 
-    if (fixedMask[i])
+    if (ReadOnly(&fixedMask[i]))
     {
         return;
     }
@@ -556,12 +567,12 @@ __global__ void CGUpdatePKernel(float4* p, const float4* r, const uint8_t* fixed
     p[i] = Add3(r[i], Mul3(p[i], beta));
 }
 
-__global__ void CommitImplicitKernel(
-    float4* pos,
-    float4* vel,
-    const float4* x0,
-    const float4* vSolved,
-    const uint8_t* fixedMask,
+__global__ __launch_bounds__(kBlockSize, 2) void CommitImplicitKernel(
+    float4* __restrict__ pos,
+    float4* __restrict__ vel,
+    const float4* __restrict__ x0,
+    const float4* __restrict__ vSolved,
+    const uint8_t* __restrict__ fixedMask,
     float h,
     float velocityDamping,
     int count)
@@ -572,7 +583,7 @@ __global__ void CommitImplicitKernel(
         return;
     }
 
-    if (fixedMask[i])
+    if (ReadOnly(&fixedMask[i]))
     {
         vel[i] = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
         pos[i] = x0[i];
@@ -588,6 +599,37 @@ __global__ void CommitImplicitKernel(
 inline int DivUp(int n, int d)
 {
     return (n + d - 1) / d;
+}
+
+inline void ConfigureKernelAttributes(DeviceSystem& sys)
+{
+    if (!sys.cudaAvailable || sys.kernelAttributesConfigured)
+    {
+        return;
+    }
+
+    auto configure = [](const void* kernel) -> void
+    {
+        cudaFuncSetAttribute(kernel, cudaFuncAttributePreferredSharedMemoryCarveout, 100);
+        cudaFuncSetCacheConfig(kernel, cudaFuncCachePreferShared);
+    };
+
+    configure(reinterpret_cast<const void*>(InitForcesKernel));
+    configure(reinterpret_cast<const void*>(SpringForceKernel));
+    configure(reinterpret_cast<const void*>(IntegrateSemiKernel));
+    configure(reinterpret_cast<const void*>(SpringLinearizeKernel));
+    configure(reinterpret_cast<const void*>(BuildImplicitBKernel));
+    configure(reinterpret_cast<const void*>(InitMassTermKernel));
+    configure(reinterpret_cast<const void*>(AccumulateImplicitMatrixKernel));
+    configure(reinterpret_cast<const void*>(DotPartialKernel));
+    configure(reinterpret_cast<const void*>(ReducePartialSumKernel));
+    configure(reinterpret_cast<const void*>(InitCGKernel));
+    configure(reinterpret_cast<const void*>(CGUpdateXRKernel));
+    configure(reinterpret_cast<const void*>(CGUpdatePKernel));
+    configure(reinterpret_cast<const void*>(CommitImplicitKernel));
+
+    cudaGetLastError();
+    sys.kernelAttributesConfigured = true;
 }
 
 bool EnsureBuffers(DeviceSystem& sys)
@@ -648,6 +690,8 @@ bool EnsureBuffers(DeviceSystem& sys)
             return false;
         }
     }
+
+    ConfigureKernelAttributes(sys);
 
     return true;
 }
