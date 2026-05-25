@@ -355,7 +355,11 @@ public class MassSpringSystemSemi : MonoBehaviour
         string guidance = string.Empty;
         if (nativeError.ToLowerInvariant().Contains("unsupported toolchain"))
         {
-            guidance = " Rebuild the plugin with scripts/build-mass-spring-plugin.sh (default: native cubin only) or pass an architecture list without '-virtual' PTX targets.";
+            guidance = " Rebuild on the target machine with scripts/build-mass-spring-plugin.sh (default: native). For multi-GPU deployment, include each GPU SM as real targets and avoid '-virtual' PTX targets.";
+        }
+        else if (nativeError.ToLowerInvariant().Contains("no kernel image is available"))
+        {
+            guidance = " The plugin was built for a different GPU SM. Rebuild on this machine (default: native) or build with explicit real targets that include this GPU (for example, \"86-real;120-real\").";
         }
 
         Debug.LogWarning($"MassSpringSystemSemi switched to C# backend: {reason}. Native error: {nativeError}.{guidance}");

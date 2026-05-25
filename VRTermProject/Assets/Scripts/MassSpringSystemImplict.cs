@@ -603,7 +603,11 @@ public class MassSpringSystemImplict : MonoBehaviour
         string guidance = string.Empty;
         if (nativeError.IndexOf("unsupported toolchain", StringComparison.OrdinalIgnoreCase) >= 0)
         {
-            guidance = " Rebuild the plugin with scripts/build-mass-spring-plugin.sh (default: native cubin only) or pass an architecture list without '-virtual' PTX targets.";
+            guidance = " Rebuild on the target machine with scripts/build-mass-spring-plugin.sh (default: native). For multi-GPU deployment, include each GPU SM as real targets and avoid '-virtual' PTX targets.";
+        }
+        else if (nativeError.IndexOf("no kernel image is available", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            guidance = " The plugin was built for a different GPU SM. Rebuild on this machine (default: native) or build with explicit real targets that include this GPU (for example, \"86-real;120-real\").";
         }
 
         Debug.LogWarning($"MassSpringSystemImplict switched to C# backend: {reason}. Native error: {nativeError}.{guidance}");

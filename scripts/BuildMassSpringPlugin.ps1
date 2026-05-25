@@ -5,7 +5,7 @@ $project_root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.P
 $cuda_dir = Join-Path $project_root "cuda"
 $build_dir = Join-Path (Join-Path $project_root "cuda") "build"
 $plugin_dir = Join-Path (Join-Path (Join-Path (Join-Path $project_root "VRTermProject") "Assets") "Plugins") "x86_64"
-$cuda_arch = if ($args.Count -gt 0) { $args[0] } else { "86-real" }
+$cuda_arch = if ($args.Count -gt 0) { $args[0] } else { "native" }
 
 $is_windows_platform = $false
 if (Get-Variable IsWindows -ErrorAction SilentlyContinue) {
