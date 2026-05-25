@@ -29,3 +29,29 @@ dotnet run -c Release -- --position 1.0 --velocity 0.0 --dt 0.016 --mass 1.0 --s
 - `output_x`
 - `output_v`
 - `checksum`
+
+## 벤치 하니스에서 실행 예시 (mattress 모델)
+
+`bench` 디렉터리의 `main.py`를 통해 제공되는 모델 파일을 사용해 C# 구현만 실행할 수 있습니다.
+
+예: `mattress` 모델을 로드하고 C#만 실행
+
+```bash
+uv run python main.py --model=mattress --run=csharp
+```
+
+예상 출력(일부):
+
+```
+Loading model from: /Users/shapelayer/Documents/GitHub/ShapeLayer/overfitting-rigidbody-rtx3050-private/bench/models/mattress.log
+Model loaded: 632 particles, 1890 springs
+1D equivalent parameters:
+	mass=1.056856, stiffness=500.000000, damping=0.200000
+	dt=0.001000
+```
+
+참고: 도커용 원샷 스크립트에서는 `--run csharp`를 전달하면 CUDA 빌드 단계를 건너뜁니다:
+
+```bash
+scripts/run-bench-in-docker.sh --run csharp -- --samples 5 --warmup 1
+```

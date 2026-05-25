@@ -10,6 +10,7 @@ git_username="Bench Runner"
 git_email="bench-runner@users.noreply.github.com"
 
 bench_args=()
+run_choice="both"
 
 usage() {
     cat <<'EOF'
@@ -43,6 +44,12 @@ while [[ $# -gt 0 ]]; do
             ;;
         --cuda-arch)
             cuda_arch="${2:?missing value for --cuda-arch}"
+            shift 2
+            ;;
+        --run)
+            # Forward run selection to bench script (cuda|csharp|both)
+            run_choice="${2:?missing value for --run}"
+            bench_args+=("--run" "${run_choice}")
             shift 2
             ;;
         --skip-dotnet-install)
@@ -92,8 +99,12 @@ if [[ "${install_dotnet}" -eq 1 ]]; then
     export PATH="${DOTNET_ROOT}:${DOTNET_ROOT}/tools:${PATH}"
 fi
 
-echo "[2/3] Building CUDA benchmark binary..."
-bash "${repo_root}/scripts/build-cuda-standalone-test.sh" "${cuda_arch}"
+if [[ "${run_choice}" == "csharp" ]]; then
+    echo "[2/3] Skipping CUDA build (run_choice=csharp)..."
+else
+    echo "[2/3] Building CUDA benchmark binary..."
+    bash "${repo_root}/scripts/build-cuda-standalone-test.sh" "${cuda_arch}"
+fi
 
 echo "[3/3] Running benchmark with uv..."
 (

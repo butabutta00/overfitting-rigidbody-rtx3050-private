@@ -5,6 +5,7 @@ import csv
 import datetime as dt
 import re
 import statistics
+import struct
 import subprocess
 import time
 from pathlib import Path
@@ -12,6 +13,97 @@ from pathlib import Path
 KEY_VALUE_RE = re.compile(
     r"(?P<key>[A-Za-z_][A-Za-z0-9_]*)=(?P<value>-?[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?)"
 )
+
+
+class MattressModel:
+    """Parser for mattress.log model files"""
+    def __init__(self, log_path: Path):
+        self.log_path = log_path
+        self.particles: list[dict] = []
+        self.particle_count = 0
+        self.spring_count = 0
+        self.gravity = (0.0, -9.81, 0.0)
+        self.dt = 0.001
+        self.stiffness = 500.0
+        self._parse()
+
+    def _parse(self) -> None:
+        """Parse mattress.log file format"""
+        with open(self.log_path, 'r') as f:
+            lines = f.readlines()
+        
+        # Parse header line
+        if not lines:
+            raise ValueError("Empty log file")
+        
+        header = lines[0]
+        if "first-frame debug snapshot" not in header:
+            raise ValueError("Invalid mattress.log format")
+        
+        # Parse parameters line
+        params_line = lines[1]
+        # Format: gravity=(0.00, -9.81, 0.00), dt=0.0010, stiffness=500.000
+        grav_match = re.search(r'gravity=\(([^,]+),\s*([^,]+),\s*([^)]+)\)', params_line)
+        if grav_match:
+            self.gravity = tuple(float(x) for x in grav_match.groups())
+        dt_match = re.search(r'dt=([0-9.]+)', params_line)
+        if dt_match:
+            self.dt = float(dt_match.group(1))
+        stiff_match = re.search(r'stiffness=([0-9.]+)', params_line)
+        if stiff_match:
+            self.stiffness = float(stiff_match.group(1))
+        
+        # Parse counts line
+        counts_line = lines[2]
+        # Format: particles=632, springs=1890
+        particle_match = re.search(r'particles=(\d+)', counts_line)
+        spring_match = re.search(r'springs=(\d+)', counts_line)
+        if particle_match:
+            self.particle_count = int(particle_match.group(1))
+        if spring_match:
+            self.spring_count = int(spring_match.group(1))
+        
+        # Parse particle lines
+        # Format: P[0] pos=(-5.00, 5.75, -5.00) vel=(0.00, 0.00, 0.00) gravity=(0.00, -9.81, 0.00) force=(0.00, -9.81, 0.00) fixed=False
+        p_pattern = re.compile(
+            r'P\[(\d+)\]\s+pos=\(([^,]+),\s*([^,]+),\s*([^)]+)\)'
+            r'\s+vel=\(([^,]+),\s*([^,]+),\s*([^)]+)\)'
+            r'.*fixed=(\w+)'
+        )
+        for line in lines[3:]:
+            match = p_pattern.search(line)
+            if match:
+                idx, px, py, pz, vx, vy, vz, fixed = match.groups()
+                self.particles.append({
+                    'idx': int(idx),
+                    'pos': (float(px), float(py), float(pz)),
+                    'vel': (float(vx), float(vy), float(vz)),
+                    'fixed': fixed.lower() == 'true'
+                })
+
+    def get_1d_equivalent_params(self) -> dict[str, float]:
+        """Extract 1D equivalent parameters from 3D mattress model"""
+        # Calculate effective mass from particle count
+        total_particles = len(self.particles)
+        free_particles = sum(1 for p in self.particles if not p['fixed'])
+        
+        # Use average effective mass
+        effective_mass = 1.0 if free_particles == 0 else float(total_particles) / float(free_particles)
+        
+        # Use system stiffness directly
+        effective_stiffness = self.stiffness
+        
+        # Damping scaled by particle count
+        effective_damping = 0.2 * (float(self.spring_count) / 1890.0)  # Normalize to mattress baseline
+        
+        return {
+            'position': 0.0,
+            'velocity': 0.0,
+            'mass': effective_mass,
+            'stiffness': effective_stiffness,
+            'damping': effective_damping,
+            'dt': self.dt,
+        }
 
 
 def parse_args() -> argparse.Namespace:
@@ -22,6 +114,7 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument("--samples", type=int, default=10, help="Number of measured runs")
     parser.add_argument("--warmup", type=int, default=2, help="Warm-up runs before sampling")
+    parser.add_argument("--model", type=str, default=None, help="Model to load (e.g., 'mattress')")
     parser.add_argument("--output-dir", type=Path, default=repo_root / "bench" / "results", help="Output directory")
 
     parser.add_argument("--skip-cuda-build", action="store_true", help="Skip CUDA build script")
@@ -49,6 +142,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--stiffness", type=float, default=120.0, help="Spring stiffness")
     parser.add_argument("--damping", type=float, default=0.2, help="Spring damping")
     parser.add_argument("--steps", type=int, default=200, help="Integration steps")
+    parser.add_argument(
+        "--run",
+        type=str,
+        default="both",
+        choices=["cuda", "csharp", "both"],
+        help="Which implementation to run (default: both)"
+    )
     return parser.parse_args()
 
 
@@ -197,20 +297,57 @@ def save_csv(output_dir: Path, rows: list[dict[str, float]]) -> Path:
     return csv_path
 
 
+def apply_model_params(args: argparse.Namespace, model_name: str) -> None:
+    """Load model and override benchmark parameters"""
+    repo_root = Path(__file__).resolve().parents[1]
+    model_path = repo_root / "bench" / "models" / f"{model_name}.log"
+    
+    if not model_path.exists():
+        raise FileNotFoundError(f"Model file not found: {model_path}")
+    
+    print(f"Loading model from: {model_path}")
+    model = MattressModel(model_path)
+    params = model.get_1d_equivalent_params()
+    
+    # Override arguments with model parameters
+    args.position = params['position']
+    args.velocity = params['velocity']
+    args.mass = params['mass']
+    args.stiffness = params['stiffness']
+    args.damping = params['damping']
+    args.dt = params['dt']
+    
+    print(f"Model loaded: {model.particle_count} particles, {model.spring_count} springs")
+    print(f"1D equivalent parameters:")
+    print(f"  mass={args.mass:.6f}, stiffness={args.stiffness:.6f}, damping={args.damping:.6f}")
+    print(f"  dt={args.dt:.6f}\n")
+
+
 def main() -> None:
     args = parse_args()
     if args.samples < 1 or args.warmup < 0:
         raise ValueError("samples must be >= 1 and warmup must be >= 0")
     if args.steps < 1:
         raise ValueError("steps must be >= 1")
+    
+    # Load model if specified
+    if args.model:
+        apply_model_params(args, args.model)
 
-    build_cuda(args)
-    build_csharp(args)
-    cuda_binary = resolve_cuda_binary(args.cuda_binary)
+    # Only build the selected implementations
+    cuda_binary = None
+    if args.run in ("cuda", "both"):
+        build_cuda(args)
+        cuda_binary = resolve_cuda_binary(args.cuda_binary)
+
+    if args.run in ("csharp", "both"):
+        build_csharp(args)
 
     for _ in range(args.warmup):
-        run_cuda(args, cuda_binary)
-        run_csharp(args)
+        if args.run in ("cuda", "both"):
+            run_cuda(args, cuda_binary)
+        if args.run in ("csharp", "both"):
+            run_csharp(args)
 
     rows: list[dict[str, float]] = []
     cuda_elapsed_values: list[float] = []
@@ -220,8 +357,17 @@ def main() -> None:
     diff_checksum_values: list[float] = []
 
     for i in range(1, args.samples + 1):
-        cuda_wall_ms, cuda_metrics = run_cuda(args, cuda_binary)
-        csharp_wall_ms, csharp_metrics = run_csharp(args)
+        # Initialize default metrics so code can handle skipped runs
+        cuda_wall_ms = 0.0
+        csharp_wall_ms = 0.0
+        cuda_metrics = {"elapsed_ms": 0.0, "output_x": 0.0, "output_v": 0.0, "checksum": 0.0}
+        csharp_metrics = {"elapsed_ms": 0.0, "output_x": 0.0, "output_v": 0.0, "checksum": 0.0}
+
+        if args.run in ("cuda", "both"):
+            cuda_wall_ms, cuda_metrics = run_cuda(args, cuda_binary)
+
+        if args.run in ("csharp", "both"):
+            csharp_wall_ms, csharp_metrics = run_csharp(args)
 
         cuda_elapsed_ms = cuda_metrics["elapsed_ms"]
         csharp_elapsed_ms = csharp_metrics["elapsed_ms"]
