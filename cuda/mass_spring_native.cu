@@ -1,5 +1,7 @@
 #include "mass_spring_native.h"
 
+#include <cooperative_groups.h>
+#include <cooperative_groups/memcpy_async.h>
 #include <cuda_runtime.h>
 
 #include <algorithm>
@@ -12,6 +14,8 @@
 
 namespace
 {
+namespace cg = cooperative_groups;
+
 constexpr float kEpsilon = 1e-6f;
 constexpr int kBlockSize = 256;
 
@@ -47,6 +51,7 @@ struct DeviceSystem
 
     bool cudaAvailable = false;
     bool kernelAttributesConfigured = false;
+    bool deviceCacheConfigured = false;
 
     std::vector<float4> hPosition;
     std::vector<float4> hVelocity;
@@ -108,6 +113,13 @@ __device__ __forceinline__ float4 Sub3(const float4& a, const float4& b)
 __device__ __forceinline__ float4 Mul3(const float4& v, float s)
 {
     return make_float4(v.x * s, v.y * s, v.z * s, 0.0f);
+}
+
+__device__ __forceinline__ float ActiveScale(const uint8_t* fixedMask, int idx)
+{
+    uint8_t mask = ReadOnly(&fixedMask[idx]);
+    uint32_t expanded = __byte_perm(static_cast<unsigned int>(mask), 0u, 0x0000);
+    return static_cast<float>((expanded & 0xffu) == 0u);
 }
 
 __global__ __launch_bounds__(kBlockSize, 2) void InitForcesKernel(
@@ -214,26 +226,22 @@ __global__ __launch_bounds__(kBlockSize, 2) void IntegrateSemiKernel(
         return;
     }
 
-    if (ReadOnly(&fixedMask[i]))
-    {
-        vel[i] = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
-        return;
-    }
-
+    float active = ActiveScale(fixedMask, i);
     float invMass = 1.0f / fmaxf(ReadOnly(&masses[i]), kEpsilon);
     float4 accel = Mul3(force[i], invMass);
 
     float4 v = vel[i];
     v = Add3(v, Mul3(accel, dt));
-    float4 x = pos[i];
+    float4 prevPos = pos[i];
+    float4 x = prevPos;
     x = Add3(x, Mul3(v, dt));
     v = Mul3(v, velocityDamping);
 
-    vel[i] = v;
-    pos[i] = x;
+    vel[i] = Mul3(v, active);
+    pos[i] = Add3(Mul3(prevPos, 1.0f - active), Mul3(x, active));
 }
 
-__global__ void CopyStateKernel(const float4* srcPos, const float4* srcVel, float4* dstPos, float4* dstVel, int count)
+__global__ __launch_bounds__(kBlockSize, 2) void CopyStateKernel(const float4* srcPos, const float4* srcVel, float4* dstPos, float4* dstVel, int count)
 {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= count)
@@ -349,17 +357,11 @@ __global__ __launch_bounds__(kBlockSize, 2) void BuildImplicitBKernel(
         return;
     }
 
-    if (ReadOnly(&fixedMask[i]))
-    {
-        b[i] = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
-        v[i] = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
-        return;
-    }
-
+    float active = ActiveScale(fixedMask, i);
     float m = ReadOnly(&masses[i]);
     float4 rhs = Add3(Mul3(v0[i], m), Mul3(Sub3(force[i], jv[i]), h));
-    b[i] = rhs;
-    v[i] = v0[i];
+    b[i] = Mul3(rhs, active);
+    v[i] = Mul3(v0[i], active);
 }
 
 __global__ __launch_bounds__(kBlockSize, 2) void InitMassTermKernel(
@@ -375,14 +377,8 @@ __global__ __launch_bounds__(kBlockSize, 2) void InitMassTermKernel(
         return;
     }
 
-    if (ReadOnly(&fixedMask[i]))
-    {
-        dst[i] = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
-    }
-    else
-    {
-        dst[i] = Mul3(src[i], ReadOnly(&masses[i]));
-    }
+    float active = ActiveScale(fixedMask, i);
+    dst[i] = Mul3(src[i], ReadOnly(&masses[i]) * active);
 }
 
 __global__ __launch_bounds__(kBlockSize, 2) void AccumulateImplicitMatrixKernel(
@@ -491,10 +487,30 @@ __global__ __launch_bounds__(kBlockSize, 2) void ReducePartialSumKernel(const fl
     int tid = threadIdx.x;
 
     float local = 0.0f;
+#if __CUDA_ARCH__ >= 800
+    cg::thread_block block = cg::this_thread_block();
+    for (int base = 0; base < count; base += blockDim.x)
+    {
+        int i = base + tid;
+        if (i < count)
+        {
+            cg::memcpy_async(block, &shared[tid], partial + i, sizeof(float));
+        }
+        else
+        {
+            shared[tid] = 0.0f;
+        }
+
+        cg::wait(block);
+        local += shared[tid];
+        cg::sync(block);
+    }
+#else
     for (int i = tid; i < count; i += blockDim.x)
     {
         local += partial[i];
     }
+#endif
 
     shared[tid] = local;
     __syncthreads();
@@ -601,6 +617,43 @@ inline int DivUp(int n, int d)
     return (n + d - 1) / d;
 }
 
+inline void ConfigureDeviceCacheHints(DeviceSystem& sys)
+{
+    if (!sys.cudaAvailable || sys.deviceCacheConfigured)
+    {
+        return;
+    }
+
+    int device = 0;
+    if (cudaGetDevice(&device) != cudaSuccess)
+    {
+        sys.deviceCacheConfigured = true;
+        return;
+    }
+
+    cudaDeviceProp props{};
+    if (cudaGetDeviceProperties(&props, device) != cudaSuccess)
+    {
+        sys.deviceCacheConfigured = true;
+        return;
+    }
+
+    if (props.persistingL2CacheMaxSize > 0 && props.l2CacheSize > 0)
+    {
+        const std::size_t persistingBudget = std::min(
+            static_cast<std::size_t>(props.persistingL2CacheMaxSize),
+            static_cast<std::size_t>(props.l2CacheSize * 3 / 4));
+
+        if (persistingBudget > 0)
+        {
+            cudaDeviceSetLimit(cudaLimitPersistingL2CacheSize, persistingBudget);
+            cudaGetLastError();
+        }
+    }
+
+    sys.deviceCacheConfigured = true;
+}
+
 inline void ConfigureKernelAttributes(DeviceSystem& sys)
 {
     if (!sys.cudaAvailable || sys.kernelAttributesConfigured)
@@ -691,6 +744,7 @@ bool EnsureBuffers(DeviceSystem& sys)
         }
     }
 
+    ConfigureDeviceCacheHints(sys);
     ConfigureKernelAttributes(sys);
 
     return true;
