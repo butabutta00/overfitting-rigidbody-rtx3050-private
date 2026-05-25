@@ -15,6 +15,29 @@
 python3 bench/main.py
 ```
 
+도커 인스턴스 최초 클론 직후 원샷 실행
+
+```bash
+bash scripts/run-bench-in-docker.sh -- --samples 10 --warmup 2
+```
+
+위 스크립트는 다음 순서로 실행됩니다.
+- dotnet 런타임/SDK 설치
+- `scripts/build-cuda-standalone-test.sh`로 CUDA 벤치 바이너리 빌드
+- `uv run python bench/main.py --skip-cuda-build ...` 실행
+
+벤치 결과 자동 커밋/푸시 옵션
+
+```bash
+bash scripts/run-bench-in-docker.sh \
+  --commit-push-results \
+  --git-username "Bench Runner" \
+  --git-email "bench-runner@users.noreply.github.com" \
+  -- --samples 10 --warmup 2
+```
+
+`--commit-push-results`를 사용하면 최신 `bench/results/<timestamp>` 디렉토리를 커밋하고 push합니다.
+
 주요 옵션 예시
 
 ```bash
