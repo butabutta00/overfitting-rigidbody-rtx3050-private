@@ -28,6 +28,10 @@ set(MSS_NVCC_FLAGS
     -Xptxas=-v,-dlcm=ca,-warn-spills,-warn-lmem-usage
 )
 
+if (MSVC)
+    list(APPEND MSS_NVCC_FLAGS -Xcompiler=/Zc:preprocessor)
+endif()
+
 if (MSS_ENABLE_LINEINFO)
     list(APPEND MSS_NVCC_FLAGS -lineinfo)
 endif()
