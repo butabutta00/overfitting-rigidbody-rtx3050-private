@@ -1,9 +1,7 @@
 [project]
 name = "bench"
 version = "0.1.0"
-description = "Add your description here"
+description = "CUDA vs C# spring-mass-damper benchmark runner"
 readme = "README.md"
 requires-python = ">=3.13"
-dependencies = [
-    "matplotlib>=3.9.0",
-]
+dependencies = []
