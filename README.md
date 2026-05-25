@@ -22,6 +22,8 @@ Software Requirements
 - NVCC
 - CMake
 - Unity 2022.3.62f3
+- (optional) .NET SDK (for C# Bench)
+- (optional) uv (for Python bench runner)
 
 ## Design
 
