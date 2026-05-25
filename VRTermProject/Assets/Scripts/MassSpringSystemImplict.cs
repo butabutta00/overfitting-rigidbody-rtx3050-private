@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using UnityEngine;
 
@@ -598,7 +599,14 @@ public class MassSpringSystemImplict : MonoBehaviour
             computeBackend = ComputeBackend.CSharp;
         }
 
-        Debug.LogWarning($"MassSpringSystemImplict switched to C# backend: {reason}. Native error: {MassSpringNativeInterop.GetLastErrorMessage()}");
+        string nativeError = MassSpringNativeInterop.GetLastErrorMessage();
+        string guidance = string.Empty;
+        if (nativeError.IndexOf("unsupported toolchain", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            guidance = " Rebuild the plugin with scripts/build-mass-spring-plugin.sh (default: native cubin only) or pass an architecture list without '-virtual' PTX targets.";
+        }
+
+        Debug.LogWarning($"MassSpringSystemImplict switched to C# backend: {reason}. Native error: {nativeError}.{guidance}");
     }
 
     private void OnDestroy()

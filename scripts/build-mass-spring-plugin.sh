@@ -5,7 +5,7 @@ project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cuda_dir="${project_root}/cuda"
 build_dir="${project_root}/cuda/build"
 plugin_dir="${project_root}/VRTermProject/Assets/Plugins/x86_64"
-cuda_arch="${1:-86-real;86-virtual}"
+cuda_arch="${1:-86-real}"
 
 rm -f "${build_dir}/CMakeCache.txt"
 rm -rf "${build_dir}/CMakeFiles"

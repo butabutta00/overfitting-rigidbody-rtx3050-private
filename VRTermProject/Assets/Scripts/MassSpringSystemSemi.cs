@@ -1,4 +1,3 @@
-using System;
 using System.Collections.Generic;
 using UnityEngine;
 
@@ -310,7 +309,7 @@ public class MassSpringSystemSemi : MonoBehaviour
         try
         {
             bool ok = nativeSystem.StepSemi(
-                timeStep,
+                physicsSimulationSubDeltaTime,
                 springStiffness,
                 springDamping,
                 gravity,
@@ -352,7 +351,14 @@ public class MassSpringSystemSemi : MonoBehaviour
             computeBackend = ComputeBackend.CSharp;
         }
 
-        Debug.LogWarning($"MassSpringSystemSemi switched to C# backend: {reason}. Native error: {MassSpringNativeInterop.GetLastErrorMessage()}");
+        string nativeError = MassSpringNativeInterop.GetLastErrorMessage();
+        string guidance = string.Empty;
+        if (nativeError.ToLowerInvariant().Contains("unsupported toolchain"))
+        {
+            guidance = " Rebuild the plugin with scripts/build-mass-spring-plugin.sh (default: native cubin only) or pass an architecture list without '-virtual' PTX targets.";
+        }
+
+        Debug.LogWarning($"MassSpringSystemSemi switched to C# backend: {reason}. Native error: {nativeError}.{guidance}");
     }
 
     private void Integrate()
@@ -363,8 +369,8 @@ public class MassSpringSystemSemi : MonoBehaviour
             Vector3 accel = p.force / p.mass;
 
         
-            p.velocity += accel * timeStep;
-            p.position += p.velocity * timeStep;
+            p.velocity += accel * physicsSimulationSubDeltaTime;
+            p.position += p.velocity * physicsSimulationSubDeltaTime;
 
             p.velocity *= 0.995f;
         }
