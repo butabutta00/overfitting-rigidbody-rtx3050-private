@@ -29,7 +29,7 @@ public class MassSpringSystemImplict : MonoBehaviour
     [SerializeField] private Collider fixVolume;
 
     [Header("Physical Simulations")]
-    [SerializeField] private float physicsSimulationSkippingCoeff = 3f;
+    [SerializeField] private float physicsSimulationSkippingCoeff = 8f;
     [SerializeField] private int framesSkippingCompute = 0;
     [SerializeField] private int nextComputeFrameSkip = 0;
 
@@ -246,7 +246,7 @@ public class MassSpringSystemImplict : MonoBehaviour
     private void Update()
     {
         var _deltaTimeLogscale = Mathf.Log10(timeStep) + 3f;
-        framesSkippingCompute = (int)(_deltaTimeLogscale + 1f + (8 * (Mathf.Pow(2f, -_deltaTimeLogscale * 2))));
+        framesSkippingCompute = (int)(_deltaTimeLogscale + 1f + (physicsSimulationSkippingCoeff * (Mathf.Pow(2f, -_deltaTimeLogscale * 2))));
 
         // 사용자가 설정한 timeStep에 맞춰 유니티의 실제 물리 루프 속도를 강제로 동기화
         Time.fixedDeltaTime = timeStep;

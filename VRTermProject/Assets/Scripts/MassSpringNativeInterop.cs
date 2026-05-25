@@ -102,6 +102,7 @@ internal static class MassSpringNativeInterop
     internal sealed class SystemHandle : IDisposable
     {
         private IntPtr nativePtr;
+        private readonly int particleCount;
         private readonly float[] positionBuffer;
         private readonly float[] velocityBuffer;
         private bool disposed;
@@ -109,6 +110,7 @@ internal static class MassSpringNativeInterop
         private SystemHandle(IntPtr ptr, int particleCount)
         {
             nativePtr = ptr;
+            this.particleCount = particleCount;
             positionBuffer = new float[particleCount * 3];
             velocityBuffer = new float[particleCount * 3];
         }
@@ -225,12 +227,17 @@ internal static class MassSpringNativeInterop
                 return false;
             }
 
-            if (mssDownloadState(nativePtr, positionBuffer, velocityBuffer, positions.Length) != 0)
+            if (positions == null || velocities == null || positions.Length < particleCount || velocities.Length < particleCount)
             {
                 return false;
             }
 
-            for (int i = 0; i < positions.Length; i++)
+            if (mssDownloadState(nativePtr, positionBuffer, velocityBuffer, particleCount) != 0)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < particleCount; i++)
             {
                 int baseIndex = i * 3;
                 positions[i] = new Vector3(positionBuffer[baseIndex], positionBuffer[baseIndex + 1], positionBuffer[baseIndex + 2]);
@@ -247,12 +254,17 @@ internal static class MassSpringNativeInterop
                 return false;
             }
 
-            if (mssDownloadState(nativePtr, positionBuffer, null, positions.Length) != 0)
+            if (positions == null || positions.Length < particleCount)
             {
                 return false;
             }
 
-            for (int i = 0; i < positions.Length; i++)
+            if (mssDownloadState(nativePtr, positionBuffer, velocityBuffer, particleCount) != 0)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < particleCount; i++)
             {
                 int baseIndex = i * 3;
                 positions[i] = new Vector3(positionBuffer[baseIndex], positionBuffer[baseIndex + 1], positionBuffer[baseIndex + 2]);
