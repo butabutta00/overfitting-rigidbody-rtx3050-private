@@ -2,25 +2,57 @@
 
 #include <cuda_runtime.h>
 
+#include <algorithm>
 #include <cstdlib>
+#include <chrono>
 #include <iomanip>
 #include <iostream>
-#include <sstream>
 #include <string>
-#include <vector>
+#include <unordered_map>
 
 namespace
 {
-float ParseOrDefault(int argc, char** argv, int index, float defaultValue)
+std::unordered_map<std::string, std::string> ParseOptions(int argc, char** argv)
 {
-    if (index >= argc)
+    std::unordered_map<std::string, std::string> options;
+    for (int i = 1; i < argc; ++i)
+    {
+        std::string key(argv[i]);
+        if (key == "--help" || key == "-h")
+        {
+            options[key] = "1";
+            continue;
+        }
+
+        if (key.rfind("--", 0) != 0)
+        {
+            continue;
+        }
+
+        if (i + 1 >= argc)
+        {
+            continue;
+        }
+
+        options[key] = argv[++i];
+    }
+    return options;
+}
+
+float ParseFloatOrDefault(
+    const std::unordered_map<std::string, std::string>& options,
+    const char* key,
+    float defaultValue)
+{
+    auto it = options.find(key);
+    if (it == options.end())
     {
         return defaultValue;
     }
 
     try
     {
-        return std::stof(argv[index]);
+        return std::stof(it->second);
     }
     catch (...)
     {
@@ -28,26 +60,49 @@ float ParseOrDefault(int argc, char** argv, int index, float defaultValue)
     }
 }
 
-int ParseOrDefaultInt(int argc, char** argv, int index, int defaultValue)
+int ParseIntOrDefault(
+    const std::unordered_map<std::string, std::string>& options,
+    const char* key,
+    int defaultValue)
 {
-    if (index >= argc)
+    auto it = options.find(key);
+    if (it == options.end())
     {
         return defaultValue;
     }
 
     try
     {
-        return std::stoi(argv[index]);
+        return std::stoi(it->second);
     }
     catch (...)
     {
         return defaultValue;
     }
+}
+
+void PrintHelp()
+{
+    std::cout << "CUDA 1D Spring-Mass-Damper benchmark options:\n";
+    std::cout << "  --position <float>   Initial position (default: 1.0)\n";
+    std::cout << "  --velocity <float>   Initial velocity (default: 0.0)\n";
+    std::cout << "  --dt <float>         Time-step (default: 0.016)\n";
+    std::cout << "  --mass <float>       Mass (default: 1.0)\n";
+    std::cout << "  --stiffness <float>  Spring stiffness (default: 120.0)\n";
+    std::cout << "  --damping <float>    Spring damping (default: 0.2)\n";
+    std::cout << "  --steps <int>        Integration steps (default: 8)\n";
 }
 }
 
 int main(int argc, char** argv)
 {
+    auto options = ParseOptions(argc, argv);
+    if (options.find("--help") != options.end() || options.find("-h") != options.end())
+    {
+        PrintHelp();
+        return 0;
+    }
+
     int deviceCount = 0;
     cudaError_t cudaErr = cudaGetDeviceCount(&deviceCount);
     if (cudaErr != cudaSuccess)
@@ -69,100 +124,25 @@ int main(int argc, char** argv)
         std::cout << "Using GPU[0]: " << prop.name << " (SM " << prop.major << "." << prop.minor << ")" << '\n';
     }
 
-    // Check for interactive mode flag. When present the program reads
-    // whitespace-separated parameter lines from stdin and emits an Output
-    // line for each. Format per line: position velocity dt mass stiffness damping steps
-    bool interactive = false;
-    for (int i = 1; i < argc; ++i)
-    {
-        if (std::string(argv[i]) == "--interactive")
-        {
-            interactive = true;
-            break;
-        }
-    }
-
     std::cout << std::fixed << std::setprecision(6);
 
-    if (interactive)
-    {
-        std::string line;
-        std::cout << "Entering interactive mode. Send lines: pos vel dt mass stiffness damping steps\n";
-        while (std::getline(std::cin, line))
-        {
-            if (line.empty())
-            {
-                continue;
-            }
-
-            std::istringstream iss(line);
-            MssOneDState state{};
-            MssOneDParams params{};
-            int steps = 1;
-
-            if (!(iss >> state.position >> state.velocity >> params.dt >> params.mass >> params.stiffness >> params.damping >> steps))
-            {
-                std::cerr << "Failed to parse input line (expected 7 values).\n";
-                continue;
-            }
-
-            if (steps < 1)
-            {
-                steps = 1;
-            }
-
-            std::cout << "Input -> x=" << state.position
-                      << ", v=" << state.velocity
-                      << ", dt=" << params.dt
-                      << ", m=" << params.mass
-                      << ", k=" << params.stiffness
-                      << ", c=" << params.damping
-                      << ", steps=" << steps
-                      << '\n';
-
-            for (int i = 0; i < steps; ++i)
-            {
-                int rc = mssOneDImplicitStep(&state, &params);
-                if (rc != 0)
-                {
-                    std::cerr << "mssOneDImplicitStep failed: " << mssGetLastError() << '\n';
-                    break;
-                }
-            }
-
-            std::cout << "Output -> x=" << state.position << ", v=" << state.velocity << '\n' << std::flush;
-        }
-
-        return 0;
-    }
-
-    // Positional inputs with defaults for quick validation run:
-    // [1] position [2] velocity [3] dt [4] mass [5] stiffness [6] damping [7] steps
     MssOneDState state{};
-    state.position = ParseOrDefault(argc, argv, 1, 1.0f);
-    state.velocity = ParseOrDefault(argc, argv, 2, 0.0f);
+    state.position = ParseFloatOrDefault(options, "--position", 1.0f);
+    state.velocity = ParseFloatOrDefault(options, "--velocity", 0.0f);
 
     MssOneDParams params{};
-    params.dt = ParseOrDefault(argc, argv, 3, 0.016f);
-    params.mass = ParseOrDefault(argc, argv, 4, 1.0f);
-    params.stiffness = ParseOrDefault(argc, argv, 5, 120.0f);
-    params.damping = ParseOrDefault(argc, argv, 6, 0.2f);
+    params.dt = ParseFloatOrDefault(options, "--dt", 0.016f);
+    params.mass = ParseFloatOrDefault(options, "--mass", 1.0f);
+    params.stiffness = ParseFloatOrDefault(options, "--stiffness", 120.0f);
+    params.damping = ParseFloatOrDefault(options, "--damping", 0.2f);
 
-    int steps = ParseOrDefaultInt(argc, argv, 7, 8);
+    int steps = ParseIntOrDefault(options, "--steps", 8);
     if (steps < 1)
     {
         steps = 1;
     }
 
-    std::cout << "Input(dummy/default) -> x=" << state.position
-              << ", v=" << state.velocity
-              << ", dt=" << params.dt
-              << ", m=" << params.mass
-              << ", k=" << params.stiffness
-              << ", c=" << params.damping
-              << ", steps=" << steps
-              << '\n';
-
+    const auto start = std::chrono::steady_clock::now();
     for (int i = 0; i < steps; ++i)
     {
         int rc = mssOneDImplicitStep(&state, &params);
@@ -172,7 +152,18 @@ int main(int argc, char** argv)
             return 4;
         }
     }
+    const auto end = std::chrono::steady_clock::now();
+    const double elapsedMs = std::chrono::duration<double, std::milli>(end - start).count();
+    const double stepsPerSec = static_cast<double>(steps) / std::max(elapsedMs / 1000.0, 1e-12);
+    const float checksum = state.position + state.velocity;
 
-    std::cout << "Output -> x=" << state.position << ", v=" << state.velocity << '\n';
+    std::cout << "mass_spring_benchmark\n";
+    std::cout << "backend=cuda\n";
+    std::cout << "steps=" << steps << '\n';
+    std::cout << "position=" << state.position << " velocity=" << state.velocity << '\n';
+    std::cout << "dt=" << params.dt << " mass=" << params.mass << " stiffness=" << params.stiffness << " damping=" << params.damping << '\n';
+    std::cout << "elapsed_ms=" << elapsedMs << " steps_per_sec=" << stepsPerSec << '\n';
+    std::cout << "output_x=" << state.position << " output_v=" << state.velocity << '\n';
+    std::cout << "checksum=" << checksum << '\n';
     return 0;
 }
