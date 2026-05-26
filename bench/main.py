@@ -7,6 +7,7 @@ import re
 import statistics
 import struct
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -154,7 +155,14 @@ def parse_args() -> argparse.Namespace:
 
 def run_command(command: list[str], fail_prefix: str) -> tuple[float, str]:
     start = time.perf_counter()
-    proc = subprocess.run(command, check=False, text=True, capture_output=True)
+    proc = subprocess.run(
+        command,
+        check=False,
+        text=True,
+        capture_output=True,
+        encoding="utf-8",
+        errors="replace",
+    )
     elapsed_ms = (time.perf_counter() - start) * 1000.0
     if proc.returncode != 0:
         raise RuntimeError(
@@ -194,19 +202,78 @@ def require_metrics(label: str, metrics: dict[str, float], required: list[str], 
 
 def resolve_cuda_binary(binary: Path) -> Path:
     resolved = binary.resolve()
-    if resolved.exists():
-        return resolved
+    is_windows = sys.platform.startswith("win")
+    shared_lib_suffixes = {".dll", ".so", ".dylib"}
 
-    fallback = resolved.parent / "Release" / resolved.name
-    if fallback.exists():
-        return fallback
+    candidates: list[Path] = [resolved]
 
-    raise FileNotFoundError(f"CUDA binary not found: {resolved}")
+    # If a shared library path is provided, try likely executable names in same folder.
+    if resolved.suffix.lower() in shared_lib_suffixes:
+        candidates.append(resolved.parent / ("main.exe" if is_windows else "main"))
+        candidates.append(resolved.parent / ("mass_spring_native.exe" if is_windows else "mass_spring_native"))
+
+    fallback_dir = resolved.parent / "Release"
+    if is_windows:
+        if resolved.suffix:
+            candidates.append(fallback_dir / f"{resolved.stem}.exe")
+        else:
+            candidates.append(fallback_dir / f"{resolved.name}.exe")
+    candidates.append(fallback_dir / resolved.name)
+    candidates.append(fallback_dir / ("main.exe" if is_windows else "main"))
+
+    checked: list[Path] = []
+    for candidate in candidates:
+        if candidate in checked:
+            continue
+        checked.append(candidate)
+        if candidate.exists() and candidate.is_file() and candidate.suffix.lower() not in shared_lib_suffixes:
+            return candidate
+
+    raise FileNotFoundError(
+        "CUDA executable not found. "
+        f"Provided path: {resolved}. Checked candidates: {', '.join(str(p) for p in checked)}"
+    )
 
 
 def build_cuda(args: argparse.Namespace) -> None:
     if args.skip_cuda_build:
         return
+
+    # Windows environments often do not have `bash` in PATH.
+    # In that case, configure/build directly with CMake.
+    if sys.platform.startswith("win"):
+        repo_root = Path(__file__).resolve().parents[1]
+        cuda_dir = repo_root / "cuda"
+        build_dir = cuda_dir / "build"
+        build_dir.mkdir(parents=True, exist_ok=True)
+
+        run_command(
+            [
+                "cmake",
+                "-S",
+                str(cuda_dir),
+                "-B",
+                str(build_dir),
+                "-DCMAKE_BUILD_TYPE=Release",
+                f"-DMSS_CUDA_ARCHITECTURES={args.cuda_arch}",
+                "-DMSS_ENABLE_LINEINFO=ON",
+            ],
+            "CUDA CMake configure failed.",
+        )
+        run_command(
+            [
+                "cmake",
+                "--build",
+                str(build_dir),
+                "--config",
+                "Release",
+                "--target",
+                "main",
+            ],
+            "CUDA CMake build failed.",
+        )
+        return
+
     build_script = args.cuda_build_script.resolve()
     if not build_script.exists():
         raise FileNotFoundError(f"CUDA build script not found: {build_script}")
