@@ -221,9 +221,12 @@ public class MassSpringSystemSemi : MonoBehaviour
 
     private void Update()
     {
-        physicsSimulationSliceSize = physicsSimulationSlicingCoeff * (Mathf.Log10(timeStep) + 3f) + 1f;
-        physicsSimulationSubDeltaTime = timeStep / physicsSimulationSliceSize;
-        framesSkippingRender = Mathf.Max(0, Mathf.CeilToInt(physicsSimulationSliceSize) - 1);
+        // physicsSimulationSliceSize = physicsSimulationSlicingCoeff * (Mathf.Log10(timeStep) + 3f) + 1f;
+        // physicsSimulationSubDeltaTime = timeStep / physicsSimulationSliceSize;
+        // physicsSimulationSubDeltaTime = (Mathf.Log10(timeStep) / 3 + 2) / 1000f;
+        physicsSimulationSubDeltaTime = Mathf.Log10(timeStep) / 2048f + 1/512f;
+        physicsSimulationSliceSize = timeStep / physicsSimulationSubDeltaTime;
+        framesSkippingRender = Mathf.Max(0, Mathf.CeilToInt(physicsSimulationSliceSize));
 
 
         // 사용자가 설정한 timeStep에 맞춰 유니티의 실제 물리 루프 속도를 강제로 동기화

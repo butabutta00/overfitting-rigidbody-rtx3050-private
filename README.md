@@ -25,6 +25,13 @@ Software Requirements
 - (optional) .NET SDK (for C# Bench)
 - (optional) uv (for Python bench runner)
 
+Targeted System
+- AMD Ryzen 5 5600 6-Core Processor (12 CPUs), ~3.5GHz
+- 32GB RAM
+- NVIDIA GeForce RTX 3050 (VRAM 8GB)
+- Windows 11 Education
+- CUDA 13.2
+
 ## Design
 
 ### 1. 시스템의 수치적분 계산과 렌더링 타이밍 분리
@@ -41,15 +48,19 @@ RTX 3050 (8GB)의 메모리 대역폭은 128-bit입니다.[^1] 따라서 메모�
 
 **`__ldg`로 읽기 전용 데이터 최적화**
 
-질량, 스프링 끝점, rest length, fixed mask등은 커널 내부에서 값이 바뀌는 것을 의도하지 않았습니다. 따라서 이들 값을 읽기 전용 데이터로 간주하여 `__ldg`를 사용하여 캐시 친화적으로 읽도록 했습니다. 이렇게 하여 일반 로드보다 불필요한 캐시 오염을 줄이면서 읽기 전용 데이터를 효율적으로 사용할 수 있습니다.
+질량, 스프링 끝점, rest length, fixed mask등은 커널 내부에서 값이 바뀌는 것을 의도하지 않았습니다. 따라서 이들 값을 읽기 전용 데이터로 간주하여 `__ldg`를 사용하여 캐시 친화적으로 읽도록 했습니다.[^3] 이렇게 하여 일반 로드보다 불필요한 캐시 오염을 줄이면서 읽기 전용 데이터를 효율적으로 사용할 수 있습니다.
 
 **`__byte_perm`을 이용한 fixed mask 분기 보조 처리**
 
 고정 파티클 여부를 빠르게 스케일 값으로 바꾸면, 이후 연산에서 branch divergence를 줄이기 쉽습니다. 따라서 `__byte_perm`을 이용하여 fixed mask를 분기 대신 정수 연산으로 정리하도록 했습니다.
 
+https://docs.nvidia.com/cuda/cuda-math-api/cuda_math_api/group__CUDA__MATH__INTRINSIC__INT.html#group__cuda__math__intrinsic__int_1ga0b8b8156fe619205bf8d65acd8f29131
+
 **`__shfl_down_sync`로 dot product 부분합 최적화**
 
 dot product 부분합을 shared memory에 의존하지 않고 warp 내부에서 먼저 줄이도록 `__shfl_down_sync`를 사용하여 reduction 병목을 줄이고, 작은 합산을 빠르게 끝내도록 했습니다.
+
+https://developer.nvidia.com/blog/using-cuda-warp-level-primitives/
 
 **`cooperative_groups::memcpy_async`로 비동기 복사**
 
@@ -66,3 +77,4 @@ reduction과 협조적 복사처럼 shared memory를 자주 쓰는 커널에 유
 
 [^1]: GeForce RTX 3050 Graphics Cards, https://www.nvidia.com/en-us/geforce/graphics-cards/30-series/rtx-3050/
 [^2]: NVIDIA Ampere Tuning Guide, https://docs.nvidia.com/cuda/ampere-tuning-guide/index.html#occupancy
+[^3]: https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/cpp-language-extensions.html#low-level-load-and-store-functions

@@ -29,7 +29,10 @@ public class MassSpringSystemImplict : MonoBehaviour
     [SerializeField] private Collider fixVolume;
 
     [Header("Physical Simulations")]
-    [SerializeField] private float physicsSimulationSkippingCoeff = 8f;
+    [SerializeField] private float __timeStepUsed;
+    // [SerializeField] private float physicsSimulationSkippingScalerC1 = 8f;
+    // [SerializeField] private float physicsSimulationSkippingScalerC2 = 0.3f;
+    // [SerializeField] private float physicsSimulationSkippingScalerC3 = -0.9f;
     [SerializeField] private int framesSkippingCompute = 0;
     [SerializeField] private int nextComputeFrameSkip = 0;
 
@@ -86,6 +89,12 @@ public class MassSpringSystemImplict : MonoBehaviour
     private int[] nativeSpringEndpoints;
     private float[] nativeRestLengths;
     private MassSpringNativeInterop.SystemHandle nativeSystem;
+
+    private void Awake()
+    {
+        framesSkippingCompute = GetFramesSkippingCompute(timeStep);
+        __timeStepUsed = timeStep;
+    }
 
     private void Start()
     {
@@ -243,10 +252,26 @@ public class MassSpringSystemImplict : MonoBehaviour
         return -1;
     }
 
+    private static int GetFramesSkippingCompute(float timeStep)
+    {
+        return (int)(Mathf.Pow(Mathf.Log10(timeStep), 2) / 2);
+    }
+
     private void Update()
     {
-        var _deltaTimeLogscale = Mathf.Log10(timeStep) + 3f;
-        framesSkippingCompute = (int)(_deltaTimeLogscale + 1f + (physicsSimulationSkippingCoeff * (Mathf.Pow(2f, -_deltaTimeLogscale * 2))));
+        /**
+         * f(x) = c_2 (log_10 (c_1 * x) + 2)
+         * g(x) = 2 ^ (c_3 log_10 x)
+         * skipping = f(x) + g(x)
+         */
+        // framesSkippingCompute = (int)(
+        //     physicsSimulationSkippingScalerC2 * Mathf.Log10(physicsSimulationSkippingScalerC1 * timeStep) +
+        //     Mathf.Pow(2, physicsSimulationSkippingScalerC3 * Mathf.Log10(timeStep))
+        // );
+        if (__timeStepUsed != timeStep) {
+            framesSkippingCompute = GetFramesSkippingCompute(timeStep);
+            __timeStepUsed = framesSkippingCompute;
+        }
 
         // 사용자가 설정한 timeStep에 맞춰 유니티의 실제 물리 루프 속도를 강제로 동기화
         Time.fixedDeltaTime = timeStep;

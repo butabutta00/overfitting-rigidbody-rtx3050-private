@@ -514,12 +514,6 @@ __global__ __launch_bounds__(kBlockSize, 2) void AccumulateImplicitMatrixKernel(
         return;
     }
 
-    int s = blockIdx.x * blockDim.x + threadIdx.x;
-    if (s >= springCount)
-    {
-        return;
-    }
-
     int2 ends = ReadOnly(&springEnds[s]);
     int a = ends.x;
     int b = ends.y;

@@ -246,7 +246,7 @@ GameObject:
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 0
+  m_IsActive: 1
 --- !u!4 &24255571
 Transform:
   m_ObjectHideFlags: 0
@@ -489,14 +489,14 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: dde3b006ffdd04101a21e0d56cd3cb12, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  timeStep: 0.01
+  timeStep: 0.001
   springStiffness: 500
   implicitIterations: 6
   particleMass: 0.1
   springDamping: 10
   gravity: {x: 0, y: -9.81, z: 0}
   fixVolume: {fileID: 13504762}
-  physicsSimulationSkippingCoeff: 0
+  __timeStepUsed: 0
   framesSkippingCompute: 0
   nextComputeFrameSkip: 0
   computeBackend: 1
@@ -1178,7 +1178,7 @@ MonoBehaviour:
   springDamping: 10
   gravity: {x: 0, y: -9.81, z: 0}
   fixVolume: {fileID: 1947549291}
-  physicsSimulationSkippingCoeff: 0
+  __timeStepUsed: 0
   framesSkippingCompute: 0
   nextComputeFrameSkip: 0
   computeBackend: 0
@@ -2188,7 +2188,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 5676118154437224752, guid: eed7f818b0693334bbac48550b02f27f, type: 3}
       propertyPath: m_IsActive
-      value: 1
+      value: 0
       objectReference: {fileID: 0}
     - target: {fileID: 8446097875293055314, guid: eed7f818b0693334bbac48550b02f27f, type: 3}
       propertyPath: m_Name
@@ -2237,7 +2237,7 @@ MonoBehaviour:
   springDamping: 10
   gravity: {x: 0, y: -9.81, z: 0}
   fixVolume: {fileID: 148587645}
-  physicsSimulationSlicingCoeff: 0
+  physicsSimulationSlicingCoeff: 3
   physicsSimulationSliceSize: 0.001
   physicsSimulationSubDeltaTime: 0.001
   framesSkippingRender: 0
